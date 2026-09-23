@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "npm run build:electron && concurrently -k \"npm:dev:frontend\" \"npm:dev:electron\"",
     "dev:frontend": "vite --host 127.0.0.1",
-    "dev:electron": "wait-on tcp:5173 && electron .",
+    "dev:electron": "wait-on http://127.0.0.1:5173 && electron .",
     "build": "npm run build:frontend && npm run build:electron",
     "build:frontend": "tsc -b && vite build",
     "build:electron": "tsc -p electron/tsconfig.json",
