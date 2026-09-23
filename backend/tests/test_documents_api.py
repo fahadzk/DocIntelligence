@@ -55,6 +55,7 @@ def test_supported_formats_and_source_locations(client):
         assert document["status"] == "ready"
         content = client.get(f"/api/projects/{project_id}/documents/{document['id']}/content").json()
         assert expected in " ".join(segment["text"] for segment in content["segments"])
+        assert client.get(f"/api/projects/{project_id}/documents/{document['id']}/original").content == contents
         if filename.endswith(".pdf"):
             assert document["page_count"] == 2
             assert [segment["page_number"] for segment in content["segments"]] == [1, 2]
@@ -161,3 +162,14 @@ def test_project_deletion_removes_only_its_document_files(client):
     assert not removed_path.exists()
     assert kept_path.is_file()
     assert client.get(f"/api/projects/{second}/documents/{kept['id']}/content").status_code == 200
+
+
+def test_retained_original_survives_source_move(client, tmp_path: Path):
+    project_id = project(client)
+    source = tmp_path / "source.txt"
+    source.write_text("Retained source text", encoding="utf-8")
+    document = upload(client, project_id, source.name, source.read_bytes())["document"]
+    source.rename(tmp_path / "moved.txt")
+    response = client.get(f"/api/projects/{project_id}/documents/{document['id']}/original")
+    assert response.status_code == 200
+    assert response.content == b"Retained source text"
