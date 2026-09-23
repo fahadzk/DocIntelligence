@@ -1,0 +1,16 @@
+node_modules/
+.npm-cache/
+dist/
+dist-electron/
+coverage/
+playwright-report/
+test-results/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+data/
+.env
+.env.*
+!.env.example
