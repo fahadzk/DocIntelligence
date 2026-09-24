@@ -57,7 +57,6 @@ test("searches and opens cited evidence in the project workspace", async () => {
     if (url.endsWith("/documents")) return reply([]);
     if (url.endsWith("/api/models")) return reply({ embeddings: ready, answers: ready });
     if (url.endsWith("/index/status")) return reply([]);
-    if (url.endsWith("/activity")) return reply([]);
     if (url.endsWith("/search") && options?.method === "POST") return reply({ results: [passage] });
     if (url.endsWith("/ask") && options?.method === "POST") return reply({ answer: "Europa orbits Jupiter [1].", supported: true, evidence: [{ number: 1, passage }] });
     throw new Error(`Unexpected request: ${url}`);
@@ -73,8 +72,8 @@ test("searches and opens cited evidence in the project workspace", async () => {
   fireEvent.click(screen.getAllByRole("button", { name: /^Ask$/ }).at(-1)!);
   expect(await screen.findByText("Supporting passages")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "View source 1" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /^Activity$/ }));
-  expect(await screen.findByRole("heading", { name: "Processing activity" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Search$/ }));
+  expect(await screen.findByPlaceholderText("Search this project")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^Ask$/ }));
   expect(screen.getByText("Supporting passages")).toBeInTheDocument();
 });

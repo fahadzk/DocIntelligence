@@ -21,13 +21,13 @@ SUPPORTED = {"pdf", "docx", "txt", "md"}
 
 
 class DocumentService:
-    def __init__(self, repository: SqliteDocumentRepository, projects: SqliteProjectRepository, extractor: Extractor, data_dir: Path, max_bytes: int, activity=None):
+    def __init__(self, repository: SqliteDocumentRepository, projects: SqliteProjectRepository, extractor: Extractor, data_dir: Path, max_bytes: int, operations=None):
         self.repository = repository
         self.projects = projects
         self.extractor = extractor
         self.storage = data_dir / "documents"
         self.max_bytes = max_bytes
-        self.activity = activity
+        self.operations = operations
         self.on_ready = None
         self.on_delete = None
         self.repository.interrupt_incomplete()
@@ -37,8 +37,8 @@ class DocumentService:
             raise DocumentError("PROJECT_NOT_FOUND", "The requested project could not be found.", 404)
 
     def _log(self, project_id: UUID, action: str, message: str, **kwargs) -> None:
-        if self.activity:
-            self.activity.record(project_id, action, message, **kwargs)
+        if self.operations:
+            self.operations.record(project_id, action, message, **kwargs)
 
     def _directory(self, project_id: UUID, document_id: UUID) -> Path:
         return self.storage / str(project_id) / str(document_id)

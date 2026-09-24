@@ -33,5 +33,5 @@
 
 ## Post-Phase 3 observability
 
-- [x] Add project-scoped activity logging for local document, retrieval, and answer operations.
-- [x] Add configurable Activity dashboard refresh and durable event persistence.
+- [x] Add background JSON Lines operational logging for document, retrieval, and answer operations.
+- [x] Keep operational file I/O off request and processing threads with queue-based logging.

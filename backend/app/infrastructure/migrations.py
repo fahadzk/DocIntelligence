@@ -70,18 +70,6 @@ def migrate(database_path: Path) -> None:
             """)
             connection.execute("PRAGMA user_version = 3")
         if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
-            connection.execute("""
-                CREATE TABLE IF NOT EXISTS activity_logs (
-                    id TEXT PRIMARY KEY,
-                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    document_id TEXT,
-                    action TEXT NOT NULL,
-                    level TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    details TEXT NOT NULL,
-                    duration_ms INTEGER,
-                    created_at TEXT NOT NULL
-                )
-            """)
-            connection.execute("CREATE INDEX IF NOT EXISTS activity_logs_project_idx ON activity_logs(project_id, created_at DESC)")
+            # Version 4 formerly created a UI activity table. Preserve the version marker
+            # for existing databases, but new installations use file-based operational logs.
             connection.execute("PRAGMA user_version = 4")

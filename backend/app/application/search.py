@@ -93,10 +93,10 @@ def split_segments(project_id: str, document_id: str, content_hash: str,
 class SearchService:
     def __init__(self, documents, repository: SearchRepository, data_dir: Path,
                  model_dir: Path | None = None,
-                 embeddings=None, vectors=None, llm=None, activity=None):
+                 embeddings=None, vectors=None, llm=None, operations=None):
         self.documents = documents
         self.repository = repository
-        self.activity = activity
+        self.operations = operations
         models = model_dir or data_dir / "models"
         self.embeddings = embeddings or LocalEmbeddings(models / "embeddings")
         self.vectors = vectors or ChromaVectorStore(data_dir / "vectors")
@@ -107,8 +107,8 @@ class SearchService:
         self._lock = threading.RLock()
 
     def _log(self, project_id: UUID, action: str, message: str, **kwargs) -> None:
-        if self.activity:
-            self.activity.record(project_id, action, message, **kwargs)
+        if self.operations:
+            self.operations.record(project_id, action, message, **kwargs)
 
     @property
     def version(self) -> str:

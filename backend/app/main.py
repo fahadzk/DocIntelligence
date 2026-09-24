@@ -11,10 +11,9 @@ from fastapi.responses import JSONResponse
 from app.application.projects import ProjectService
 from app.application.documents import DocumentService
 from app.application.search import SearchService
-from app.application.activity import ActivityService
 from app.config.settings import get_settings
 from app.domain.documents import DocumentError
-from app.infrastructure.activity_repository import ActivityRepository
+from app.infrastructure.operational_logging import OperationalLogger
 from app.infrastructure.extractors import LocalExtractor
 from app.infrastructure.sqlite_document_repository import SqliteDocumentRepository
 from app.infrastructure.sqlite_project_repository import SqliteProjectRepository
@@ -33,9 +32,9 @@ def get_project_service() -> ProjectService:
 
 
 @lru_cache
-def get_activity_service() -> ActivityService:
+def get_operational_logger() -> OperationalLogger:
     settings = get_settings()
-    return ActivityService(ActivityRepository(settings.database_path), SqliteProjectRepository(settings.database_path))
+    return OperationalLogger(settings.data_dir, settings.log_level)
 
 
 @lru_cache
@@ -47,7 +46,7 @@ def get_document_service() -> DocumentService:
         LocalExtractor(),
         settings.data_dir,
         settings.max_document_bytes,
-        get_activity_service(),
+        get_operational_logger(),
     )
 
 
@@ -56,7 +55,7 @@ def get_search_service() -> SearchService:
     settings = get_settings()
     documents = get_document_service()
     service = SearchService(documents, SearchRepository(settings.database_path), settings.data_dir, settings.model_dir,
-                            activity=get_activity_service())
+                            operations=get_operational_logger())
     def schedule_index(project_id, document_id):
         threading.Thread(target=service.index_document, args=(project_id, document_id),
                          daemon=True, name=f"index-{document_id}").start()
@@ -67,12 +66,14 @@ def get_search_service() -> SearchService:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    get_operational_logger()
     get_project_service()
     get_document_service()
     search_service = get_search_service()
     threading.Thread(target=search_service.ensure_indexes, daemon=True, name="index-recovery").start()
     logger.info("Document Intelligence backend started")
     yield
+    get_operational_logger().close()
     logger.info("Document Intelligence backend stopped")
 
 
@@ -126,9 +127,7 @@ def health() -> dict[str, str]:
 from app.api.projects import router as projects_router  # noqa: E402
 from app.api.documents import router as documents_router  # noqa: E402
 from app.api.search import router as search_router, models_router  # noqa: E402
-from app.api.activity import router as activity_router  # noqa: E402
 app.include_router(projects_router)
 app.include_router(documents_router)
 app.include_router(search_router)
 app.include_router(models_router)
-app.include_router(activity_router)

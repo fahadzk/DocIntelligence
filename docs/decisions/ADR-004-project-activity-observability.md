@@ -1,15 +1,15 @@
-# ADR-004: Project activity observability
+# ADR-004: Background operational logging
 
 **Status:** Accepted — 2026-09-24
 
 ## Decision
 
-Store structured project activity in SQLite migration v4. Events are project-scoped and use an operation, human-readable message, safe metadata, severity, optional document ID, duration, and timestamp. The frontend fetches events only when the Activity tab is selected. It refreshes every five seconds by default, and the user can choose 10, 15, 30, or 60 seconds, disable polling, or refresh on demand.
+Replace the project Activity dashboard, polling API, and SQLite activity writes with standard-library queue-based background logging. Application services send privacy-safe structured events to an `OperationalLogger`. Python `QueueHandler` returns control to the caller without writing to disk; a dedicated `QueueListener` writes JSON Lines to `logs/document-intelligence.jsonl` under the configured application data directory. `RotatingFileHandler` rotates each file at 10 MB and retains five backups.
 
 ## Rationale
 
-Users need to see local processing steps and performance without consulting terminals. SQLite preserves events across restarts and avoids exposing backend internals directly to the frontend. The event payload excludes raw document content, prompts, and generated answers to preserve local privacy and avoid unnecessarily duplicating sensitive material.
+The operational details are useful for diagnosis but do not need to be a constantly polled product surface. Queue-based logging prevents document import, extraction, indexing, search, and Ask work from blocking on logging I/O. JSON Lines remain easy to tail, archive, or inspect with standard tooling.
 
 ## Consequences
 
-New work records document import/extraction, fixed chunking settings, embedding provider/vector store, index persistence, retrieval, local generation, citation validation, errors, counts, and elapsed time. Older activity does not exist retroactively. Activity rows are deleted with their project.
+The file records import/extraction, fixed chunking configuration, embedding/vector/FTS storage, retrieval, local generation, citation validation, errors, counts, and elapsed time. It excludes document content, user prompts, and generated answers. Existing SQLite migration 4 activity tables are deliberately left untouched for compatibility, but the application no longer writes or serves them.

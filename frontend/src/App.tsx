@@ -9,7 +9,6 @@ import { Sidebar } from "./components/Sidebar";
 import { EditProjectDialog } from "./features/projects/EditProjectDialog";
 import { DocumentsWorkspace } from "./features/documents/DocumentsWorkspace";
 import { SearchWorkspace } from "./features/search/SearchWorkspace";
-import { ActivityWorkspace } from "./features/activity/ActivityWorkspace";
 import { NewProjectDialog } from "./features/projects/NewProjectDialog";
 import { ProjectList } from "./features/projects/ProjectList";
 import { projectsApi } from "./services/api";
@@ -35,12 +34,12 @@ export function App() {
 }
 function Home() { return <EmptyState eyebrow="Workspace" title="Your research begins with a project."><p>Create a project to organize a collection of documents. Import, search, and answers will arrive in later phases.</p></EmptyState>; }
 function ProjectWorkspace({ project, onEdit }: { project: Project; onEdit: () => void }) {
-  const [section, setSection] = useState<"documents" | "search" | "ask" | "activity">("documents");
+  const [section, setSection] = useState<"documents" | "search" | "ask">("documents");
   useEffect(() => setSection("documents"), [project.id]);
   return <section><PageHeader eyebrow="Project workspace" title={project.name} actions={<IconButton aria-label="Edit project" title="Edit project" onClick={onEdit}>•••</IconButton>} />
     <nav className="workspace-tabs" aria-label="Project sections">
-      {(["documents", "search", "ask", "activity"] as const).map((tab) => <button key={tab} aria-current={section === tab ? "page" : undefined} onClick={() => setSection(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}
+      {(["documents", "search", "ask"] as const).map((tab) => <button key={tab} aria-current={section === tab ? "page" : undefined} onClick={() => setSection(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}
     </nav>
-    <div hidden={section !== "documents"}><DocumentsWorkspace key={project.id} project={project} /></div><div hidden={section !== "search"}><SearchWorkspace key={project.id + "search"} project={project} mode="search" active={section === "search"} /></div><div hidden={section !== "ask"}><SearchWorkspace key={project.id + "ask"} project={project} mode="ask" active={section === "ask"} /></div><div hidden={section !== "activity"}><ActivityWorkspace key={project.id} project={project} active={section === "activity"} /></div>
+    <div hidden={section !== "documents"}><DocumentsWorkspace key={project.id} project={project} /></div><div hidden={section !== "search"}><SearchWorkspace key={project.id + "search"} project={project} mode="search" active={section === "search"} /></div><div hidden={section !== "ask"}><SearchWorkspace key={project.id + "ask"} project={project} mode="ask" active={section === "ask"} /></div>
   </section>;
 }

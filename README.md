@@ -26,8 +26,6 @@ Files and extracted artifacts are stored in the configured `DOCUMENT_INTELLIGENC
 
 SQLite stores project/document metadata, source-located passages, and the FTS5 keyword index. Chroma vectors and downloaded models live under `data/vectors/` and `data/models/`. The **Rebuild index** action in Search safely regenerates passage and vector indexes from retained extracted text. Scanned PDFs and other files without usable text remain excluded until OCR is added in a later phase.
 
-## Activity dashboard
+## Background operational logs
 
-Each project includes an **Activity** tab. It records structured operational events for document upload and persistence, extraction, chunking, local embeddings, SQLite FTS5, Chroma storage, search retrieval, and local answer generation. Entries include safe metadata such as storage provider, chunking configuration, counts, success or error state, and elapsed time. Document text, prompts, and answers are not saved in the activity log.
-
-The tab refreshes every 5 seconds by default. Choose 10, 15, 30, or 60 seconds, or disable automatic refresh and use **Refresh now**. The preference is stored locally in the desktop UI. Activity records are project-scoped and retained in SQLite with project deletion.
+Operational events for imports, extraction, chunking, local embeddings, SQLite FTS5, Chroma, search, and Ask are written in the background to JSON Lines. The development path is `data/logs/document-intelligence.jsonl`; production uses the configured application data directory. Files rotate at 10 MB and retain five backups. The log records safe metadata, timings, counts, and errors, never document text, questions, or generated answers. No dashboard, polling, logging API, or SQLite activity writes are used.

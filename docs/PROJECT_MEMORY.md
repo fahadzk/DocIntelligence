@@ -12,4 +12,4 @@
 - Citation evidence is resolved through live, project-scoped SQLite passages; deleted documents cannot be cited. A cited model response still requires user judgment and is not a factual guarantee.
 - The visual direction is “Calm Intelligence”: neutral, evidence-first, professional, and not chatbot-centric.
 - APIs return explicit Pydantic contracts. Missing projects use `PROJECT_NOT_FOUND` and no internal trace is exposed to users.
-- SQLite migration version 4 stores project-scoped operational activity. The Activity tab defaults to 5-second polling and allows 10, 15, 30, or 60 seconds, or disabled refresh. Logs record safe operational metadata and timings but never raw document text, prompts, or generated answers.
+- Operational events use standard-library queue-based JSON Lines logging at `logs/document-intelligence.jsonl` below the configured data directory. File I/O is handled by a background listener, files rotate at 10 MB with five backups, and logs carry safe metadata/timings but never raw document text, prompts, or generated answers. The former migration 4 activity table is retained only for existing-database compatibility.

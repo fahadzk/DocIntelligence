@@ -22,6 +22,6 @@
 
 ## Unreleased
 
-- Added a project Activity dashboard with a configurable 5–60 second refresh rate, disabled mode, and manual refresh.
-- Added durable structured activity events for import, extraction, chunking parameters, FastEmbed/Chroma embeddings, SQLite FTS5 indexing, hybrid search, and local Ask generation/citation validation.
+- Replaced the Activity dashboard, API, and SQLite event writes with background JSON Lines operational logs.
+- Added queue-based rotating file logging for import, extraction, chunking parameters, FastEmbed/Chroma embeddings, SQLite FTS5 indexing, hybrid search, and local Ask generation/citation validation.
 - Corrected automatic answer citation recovery so model knowledge cannot be shown as document evidence; unsupported claims are rejected and source-matching fallback answers are extractive.
