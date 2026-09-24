@@ -67,6 +67,16 @@ def test_answer_citations_are_validated(client):
     assert len(body["evidence"]) == 1
     assert body["evidence"][0]["passage"]["project_id"] == first
 
+    class ParagraphCitedLLM:
+        ready = True
+        def answer(self, _system, _prompt):
+            return "Europa orbits Jupiter. It is a moon in the retrieved source [1]."
+
+    service.llm = ParagraphCitedLLM()
+    body = client.post(f"/api/projects/{first}/ask", json={"question": "What does Europa orbit?"}).json()
+    assert body["supported"]
+    assert body["evidence"][0]["number"] == 1
+
     class InvalidLLM:
         ready = True
         def answer(self, _system, _prompt):
