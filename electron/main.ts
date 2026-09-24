@@ -11,9 +11,9 @@ const dataDir = process.env.DOCUMENT_INTELLIGENCE_DATA_DIR ??
   (app.isPackaged ? path.join(app.getPath("userData"), "data") : path.join(projectRoot, "data"));
 
 async function waitForBackend(): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try { const response = await fetch(`${BACKEND_URL}/health`); if (response.ok && (await response.json()).service === "document-intelligence-backend") return; } catch { /* backend is starting */ }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error("The local service did not become ready.");
 }
@@ -22,7 +22,8 @@ function startBackend(): void {
   const python = process.env.PYTHON_EXECUTABLE ?? path.join(projectRoot, ".venv", "Scripts", "python.exe");
   backend = spawn(python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(backendPort)], {
     cwd: path.join(projectRoot, "backend"), windowsHide: true, stdio: "pipe",
-    env: { ...process.env, DOCUMENT_INTELLIGENCE_DATA_DIR: dataDir }
+    env: { ...process.env, DOCUMENT_INTELLIGENCE_DATA_DIR: dataDir,
+      HF_HUB_DISABLE_XET: process.env.HF_HUB_DISABLE_XET ?? "1" }
   });
   backend.stderr?.on("data", (data) => console.error(`[backend] ${data}`));
 }
@@ -37,6 +38,8 @@ async function createWindow(): Promise<void> {
   const window = new BrowserWindow({ width: 1280, height: 820, minWidth: 1000, minHeight: 650, title: "Document Intelligence", webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, "preload.js") } });
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(`${BACKEND_URL}/api/projects/`) && url.includes("/original#page=")) void shell.openExternal(url);
+    if (url === "https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q" ||
+        url === "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF") void shell.openExternal(url);
     return { action: "deny" };
   });
   await window.loadURL(app.isPackaged ? BACKEND_URL : (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"));

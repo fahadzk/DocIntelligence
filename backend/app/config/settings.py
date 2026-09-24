@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="DOCUMENT_INTELLIGENCE_", extra="ignore")
     environment: str = "development"
     data_dir: Path = Path(__file__).resolve().parents[3] / "data"
+    model_dir: Path | None = None
     max_document_bytes: int = 50 * 1024 * 1024
     host: str = "127.0.0.1"
     port: int = 8000

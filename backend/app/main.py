@@ -10,11 +10,14 @@ from fastapi.responses import JSONResponse
 
 from app.application.projects import ProjectService
 from app.application.documents import DocumentService
+from app.application.search import SearchService
 from app.config.settings import get_settings
 from app.domain.documents import DocumentError
 from app.infrastructure.extractors import LocalExtractor
 from app.infrastructure.sqlite_document_repository import SqliteDocumentRepository
 from app.infrastructure.sqlite_project_repository import SqliteProjectRepository
+from app.infrastructure.search_repository import SearchRepository
+import threading
 
 logging.basicConfig(level=get_settings().log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -39,16 +42,31 @@ def get_document_service() -> DocumentService:
     )
 
 
+@lru_cache
+def get_search_service() -> SearchService:
+    settings = get_settings()
+    documents = get_document_service()
+    service = SearchService(documents, SearchRepository(settings.database_path), settings.data_dir, settings.model_dir)
+    def schedule_index(project_id, document_id):
+        threading.Thread(target=service.index_document, args=(project_id, document_id),
+                         daemon=True, name=f"index-{document_id}").start()
+    documents.on_ready = schedule_index
+    documents.on_delete = service.remove_document
+    return service
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     get_project_service()
     get_document_service()
+    search_service = get_search_service()
+    threading.Thread(target=search_service.ensure_indexes, daemon=True, name="index-recovery").start()
     logger.info("Document Intelligence backend started")
     yield
     logger.info("Document Intelligence backend stopped")
 
 
-app = FastAPI(title="Document Intelligence", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Document Intelligence", version="0.3.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:5174"],
@@ -97,5 +115,8 @@ def health() -> dict[str, str]:
 
 from app.api.projects import router as projects_router  # noqa: E402
 from app.api.documents import router as documents_router  # noqa: E402
+from app.api.search import router as search_router, models_router  # noqa: E402
 app.include_router(projects_router)
 app.include_router(documents_router)
+app.include_router(search_router)
+app.include_router(models_router)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 - 2026-09-24
+
+- Added recoverable, versioned passage indexing, SQLite FTS5 keyword search, and local Chroma semantic search.
+- Added app-managed local model setup, hybrid Search, and evidence-backed Ask with validated citation references.
+- Added offline retrieval benchmark and backend/desktop tests for isolation, deletion, search, and restart.
+- Kept indexing off the import completion path, added recoverable FTS rebuilds, clickable evidence citations, and a clear low-memory answer state.
+
 ## 0.2.0 - 2026-09-23
 
 - Added versioned document migration, project-scoped retained files, duplicate detection, and recovery states.

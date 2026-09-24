@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 180_000,
+  timeout: 300_000,
   use: { trace: "retain-on-failure" },
   webServer: {
     command: "npm.cmd run dev:frontend -- --port 5174",

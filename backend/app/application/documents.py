@@ -26,6 +26,8 @@ class DocumentService:
         self.extractor = extractor
         self.storage = data_dir / "documents"
         self.max_bytes = max_bytes
+        self.on_ready = None
+        self.on_delete = None
         self.repository.interrupt_incomplete()
 
     def require_project(self, project_id: UUID) -> None:
@@ -117,6 +119,8 @@ class DocumentService:
             temporary.write_text(json.dumps({"segments": result.segments}, ensure_ascii=False), encoding="utf-8")
             os.replace(temporary, content)
             self.repository.update(project_id, document_id, "ready", "complete", page_count=result.page_count)
+            if self.on_ready:
+                self.on_ready(project_id, document_id)
         except DocumentError as error:
             self.repository.update(project_id, document_id, "failed", "extraction", error.code, error.message)
         except Exception:
@@ -145,6 +149,8 @@ class DocumentService:
 
     def delete(self, project_id: UUID, document_id: UUID) -> None:
         self.get(project_id, document_id)
+        if self.on_delete:
+            self.on_delete(project_id, document_id)
         directory = self._directory(project_id, document_id)
         if directory.exists():
             shutil.rmtree(directory)

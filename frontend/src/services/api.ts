@@ -1,5 +1,6 @@
 import type { Project } from "../types/projects";
 import type { DocumentItem, ImportOutcome, Segment } from "../types/documents";
+import type { Answer, IndexState, ModelState, Models, Passage } from "../types/search";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -32,4 +33,14 @@ export const documentsApi = {
   },
   originalUrl: (projectId: string, id: string, page?: number) =>
     `${API_URL}/api/projects/${projectId}/documents/${id}/original${page ? `#page=${page}` : ""}`
+};
+
+export const searchApi = {
+  status: (projectId: string) => request<IndexState[]>(`/api/projects/${projectId}/index/status`),
+  rebuild: (projectId: string) => request<{ status: string }>(`/api/projects/${projectId}/index/rebuild`, { method: "POST" }),
+  search: (projectId: string, query: string) => request<{ results: Passage[] }>(`/api/projects/${projectId}/search`, { method: "POST", body: JSON.stringify({ query }) }),
+  ask: (projectId: string, question: string) => request<Answer>(`/api/projects/${projectId}/ask`, { method: "POST", body: JSON.stringify({ question }) }),
+  models: () => request<Models>("/api/models"),
+  setup: (kind: "embeddings" | "answers") => request<ModelState>(`/api/models/${kind}/setup`, { method: "POST" }),
+  evidence: (projectId: string, id: string) => request<Passage>(`/api/projects/${projectId}/evidence/${id}`)
 };

@@ -17,7 +17,16 @@
 - [x] Surface progress, failures, retry, reading, original opening, and deletion
 - [x] Cover import, isolation, recovery, deletion, and Electron restart
 
+## Phase 3 - Search and grounded answers
+
+- [x] SQLite FTS5 passages with source offsets and project scoping
+- [x] Local ONNX embeddings and Chroma behind provider boundaries
+- [x] Hybrid retrieval, model setup UI, Search and Ask workspaces
+- [x] Evidence IDs, project-scoped citation validation, and index recovery/rebuild
+- [x] Backend, frontend, and Electron search/restart tests
+- [x] Complete local answer-model download and record CPU answer benchmark
+
 ## Later phases (not in current scope)
 
-- Search, citations, embeddings, and retrieval
-- Grounded question answering
+- OCR and research-intelligence workflows
+- Packaged installer validation

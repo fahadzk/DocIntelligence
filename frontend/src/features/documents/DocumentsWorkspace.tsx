@@ -11,6 +11,7 @@ export function DocumentsWorkspace({ project }: { project: Project }) {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [selected, setSelected] = useState<DocumentItem>();
   const [segments, setSegments] = useState<Segment[]>([]);
+  const [contentLoading, setContentLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string>();
@@ -35,9 +36,10 @@ export function DocumentsWorkspace({ project }: { project: Project }) {
     return () => window.clearInterval(timer);
   }, [documents, refresh]);
   useEffect(() => {
-    if (!selectedId || selectedStatus !== "ready") { setSegments([]); return; }
+    if (!selectedId || selectedStatus !== "ready") { setSegments([]); setContentLoading(false); return; }
     let active = true;
-    documentsApi.content(project.id, selectedId).then((result) => { if (active) setSegments(result.segments); }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Unable to read document."); });
+    setContentLoading(true);
+    documentsApi.content(project.id, selectedId).then((result) => { if (active) setSegments(result.segments); }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Unable to read document."); }).finally(() => { if (active) setContentLoading(false); });
     return () => { active = false; };
   }, [project.id, selectedId, selectedStatus]);
   async function importFiles(files: FileList | null) {
@@ -72,7 +74,7 @@ export function DocumentsWorkspace({ project }: { project: Project }) {
     {loading ? <LoadingState label="Loading documents…" /> : documents.length === 0 ? <EmptyState eyebrow="Documents" title="No documents yet"><p>Add a PDF, Word document, text file, or Markdown file to start reading it here.</p></EmptyState> :
     <div className="documents-layout"><div className="documents-list" aria-label="Documents">{documents.map((item) => <button key={item.id} className={selected?.id === item.id ? "document-row selected" : "document-row"} onClick={() => { setSelected(item); setConfirmDelete(false); }}><span className="document-type">{item.file_type.toUpperCase()}</span><span className="document-row-main"><strong>{item.display_name}</strong><small>{new Date(item.created_at).toLocaleDateString()} · {item.stage === "extracting" ? "Extracting text" : item.status === "ready" ? "Ready" : item.status === "failed" ? "Needs attention" : item.stage}</small></span><span className={`status-dot status-${item.status}`} /></button>)}</div>
     <div className="document-detail">{selected ? <><div className="detail-header"><div><p className="eyebrow">{selected.file_type.toUpperCase()} · {formatSize(selected.size_bytes)}</p><h3>{selected.display_name}</h3></div><Button onClick={() => openOriginal()}>Open original</Button></div>
-      {selected.status === "processing" ? <LoadingState label="Extracting readable text…" /> : selected.status === "failed" ? <div className="document-failure"><strong>Could not process this document</strong><p>{selected.error_message}</p>{["INTERRUPTED", "PROCESSING_ERROR"].includes(selected.error_code ?? "") && <Button onClick={() => void retry()}>Retry</Button>}</div> : <div className="document-text">{segments.map((segment) => <section key={segment.index} className="text-segment"><div className="segment-label">{segment.label}{segment.page_number && <button onClick={() => openOriginal(segment.page_number ?? undefined)}>Open page {segment.page_number}</button>}</div><p>{segment.text}</p></section>)}</div>}
+      {selected.status === "processing" ? <LoadingState label="Extracting readable text…" /> : selected.status === "failed" ? <div className="document-failure"><strong>Could not process this document</strong><p>{selected.error_message}</p>{["INTERRUPTED", "PROCESSING_ERROR"].includes(selected.error_code ?? "") && <Button onClick={() => void retry()}>Retry</Button>}</div> : contentLoading ? <LoadingState label="Loading extracted text…" /> : <div className="document-text">{segments.map((segment) => <section key={segment.index} className="text-segment"><div className="segment-label">{segment.label}{segment.page_number && <button onClick={() => openOriginal(segment.page_number ?? undefined)}>Open page {segment.page_number}</button>}</div><p>{segment.text}</p></section>)}</div>}
       <div className="detail-footer">{confirmDelete ? <><span>Delete this document and its stored copy?</span><Button variant="danger" onClick={() => void remove()}>Delete document</Button><Button onClick={() => setConfirmDelete(false)}>Cancel</Button></> : <Button variant="quiet" onClick={() => setConfirmDelete(true)}>Delete document</Button>}</div>
     </> : <div className="select-document">Select a document to read its extracted text.</div>}</div></div>}
   </section>;

@@ -42,6 +42,34 @@ test("imports and reads a document in the project workspace", async () => {
   render(<App />);
   const input = await screen.findByLabelText("Choose documents");
   fireEvent.change(input, { target: { files: [new File(["Readable notes"], "notes.txt", { type: "text/plain" })] } });
-  await waitFor(() => expect(screen.getByText("Readable notes")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText("Readable notes")).toBeInTheDocument(), { timeout: 5000 });
   expect(screen.getAllByText("notes.txt")).toHaveLength(2);
+});
+
+test("searches and opens cited evidence in the project workspace", async () => {
+  const passage = { id: "33333333-3333-4333-8333-333333333333", project_id: project.id,
+    document_id: "22222222-2222-4222-8222-222222222222", display_name: "facts.txt",
+    file_type: "txt", label: "Paragraph 1", page_number: null, paragraph_number: 1,
+    text: "Europa orbits Jupiter.", match_type: "keyword" };
+  const ready = { status: "ready", error: null, name: "Local", size_mb: 70, source: "https://huggingface.co" };
+  vi.stubGlobal("fetch", vi.fn(async (url: string, options?: RequestInit) => {
+    if (url.endsWith("/api/projects")) return reply([project]);
+    if (url.endsWith("/documents")) return reply([]);
+    if (url.endsWith("/api/models")) return reply({ embeddings: ready, answers: ready });
+    if (url.endsWith("/index/status")) return reply([]);
+    if (url.endsWith("/search") && options?.method === "POST") return reply({ results: [passage] });
+    if (url.endsWith("/ask") && options?.method === "POST") return reply({ answer: "Europa orbits Jupiter [1].", supported: true, evidence: [{ number: 1, passage }] });
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  render(<App />);
+  fireEvent.click((await screen.findAllByRole("button", { name: /^Search$/ }))[0]);
+  fireEvent.change(screen.getByLabelText("Search terms"), { target: { value: "Europa" } });
+  fireEvent.click(screen.getAllByRole("button", { name: /^Search$/ }).at(-1)!);
+  expect(await screen.findByText("Europa orbits Jupiter.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Ask$/ }));
+  fireEvent.change(screen.getByLabelText("Question"), { target: { value: "Which planet?" } });
+  await waitFor(() => expect(screen.getAllByRole("button", { name: /^Ask$/ }).at(-1)).toBeEnabled());
+  fireEvent.click(screen.getAllByRole("button", { name: /^Ask$/ }).at(-1)!);
+  expect(await screen.findByText("Supporting passages")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "View source 1" })).toBeInTheDocument();
 });

@@ -47,3 +47,25 @@ def migrate(database_path: Path) -> None:
             connection.execute("PRAGMA user_version = 2")
         elif connection.execute("PRAGMA user_version").fetchone()[0] < 2:
             connection.execute("PRAGMA user_version = 2")
+        if connection.execute("PRAGMA user_version").fetchone()[0] < 3:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS passages (
+                    id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    segment_index INTEGER NOT NULL, chunk_index INTEGER NOT NULL,
+                    label TEXT NOT NULL, page_number INTEGER, paragraph_number INTEGER,
+                    start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
+                    text TEXT NOT NULL, content_hash TEXT NOT NULL, index_version TEXT NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS passages_project_idx ON passages(project_id, document_id)")
+            connection.execute("CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(id UNINDEXED, project_id UNINDEXED, text, tokenize='unicode61')")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS document_indexes (
+                    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                    project_id TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL,
+                    index_version TEXT NOT NULL, content_hash TEXT NOT NULL,
+                    error_message TEXT, updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("PRAGMA user_version = 3")
