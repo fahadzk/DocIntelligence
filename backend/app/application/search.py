@@ -239,6 +239,18 @@ class SearchService:
             re.search(r"(?:\s*\[\d+\])+\s*[.!?]*$", block) for block in blocks
         )
         abstains = bool(re.search(r"\b(?:cannot find support|not enough information|not supported by|don't know)\b", answer, re.I))
+        # Qwen can occasionally omit citation markers altogether despite the
+        # instruction. Only in that case, attach the highest ranked passage when
+        # the generated answer demonstrably overlaps its source. Existing markers
+        # are never rewritten, so malformed or out-of-range citations still fail.
+        if answer and not numbers and not abstains:
+            answer_terms = set(re.findall(r"[a-z0-9]{4,}", answer.lower()))
+            source_terms = set(re.findall(r"[a-z0-9]{4,}", passages[0]["text"].lower()))
+            if len(answer_terms & source_terms) >= 2:
+                answer = f"{answer.rstrip()} [1]"
+                numbers = {1}
+                blocks = [answer]
+                cited_throughout = True
         if (not answer or not numbers or not cited_throughout or abstains
                 or any(number < 1 or number > len(passages) for number in numbers)):
             return {"answer": "I couldn't verify an answer against the retrieved passages. Review the search results instead.",

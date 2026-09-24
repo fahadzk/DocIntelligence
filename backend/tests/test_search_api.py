@@ -77,6 +77,17 @@ def test_answer_citations_are_validated(client):
     assert body["supported"]
     assert body["evidence"][0]["number"] == 1
 
+    class UnmarkedButGroundedLLM:
+        ready = True
+        def answer(self, _system, _prompt):
+            return "Europa orbits Jupiter, according to the retrieved document."
+
+    service.llm = UnmarkedButGroundedLLM()
+    body = client.post(f"/api/projects/{first}/ask", json={"question": "What does Europa orbit?"}).json()
+    assert body["supported"]
+    assert body["answer"].endswith("[1]")
+    assert body["evidence"][0]["number"] == 1
+
     class InvalidLLM:
         ready = True
         def answer(self, _system, _prompt):
