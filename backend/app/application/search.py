@@ -14,6 +14,50 @@ from app.infrastructure.search_repository import SearchRepository
 logger = logging.getLogger(__name__)
 CHUNK_VERSION = "segment-900-overlap-120-v1"
 
+SUPPORT_STOP_WORDS = {
+    "about", "according", "after", "also", "and", "are", "been", "between", "could", "document",
+    "from", "have", "include", "into", "its", "more", "over", "that", "the", "their", "these",
+    "this", "they", "through", "who", "with", "would",
+}
+
+
+def supporting_passage(sentence: str, passages: list[dict]) -> int | None:
+    """Return a source only when a sentence has concrete textual support."""
+    source_sentence = re.sub(r"\[\d+\]", "", sentence)
+    source_terms = {term.lower() for term in re.findall(r"[A-Za-z0-9]{3,}", source_sentence)
+                    if term.lower() not in SUPPORT_STOP_WORDS}
+    required = {term.lower() for term in re.findall(r"\b[A-Z][A-Za-z0-9]{2,}\b", source_sentence)
+                if term.lower() not in SUPPORT_STOP_WORDS}
+    numeric = set(re.findall(r"\b\d+(?:[,.]\d+)?\b", source_sentence))
+    best_index = None
+    best_overlap = 0
+    for index, passage in enumerate(passages, 1):
+        passage_terms = {term.lower() for term in re.findall(r"[A-Za-z0-9]{3,}", passage["text"])}
+        if not required.issubset(passage_terms) or not numeric.issubset(set(re.findall(r"\b\d+(?:[,.]\d+)?\b", passage["text"]))):
+            continue
+        overlap = len(source_terms & passage_terms)
+        if overlap > best_overlap:
+            best_index, best_overlap = index, overlap
+    minimum = max(2, min(5, len(source_terms) // 3))
+    return best_index if best_index is not None and best_overlap >= minimum else None
+
+def extractive_answer(question: str, passages: list[dict]) -> tuple[str, int] | None:
+    question_terms = {term.lower() for term in re.findall(r"[A-Za-z0-9]{3,}", question)
+                      if term.lower() not in SUPPORT_STOP_WORDS}
+    minimum = min(2, len(question_terms))
+    if not minimum:
+        return None
+    best: tuple[int, int, str] | None = None
+    for index, passage in enumerate(passages, 1):
+        for sentence in re.split(r"(?<=[.!?])\s+|\n+", passage["text"]):
+            sentence = sentence.strip()
+            terms = {term.lower() for term in re.findall(r"[A-Za-z0-9]{3,}", sentence)}
+            score = len(question_terms & terms)
+            if score >= minimum and (best is None or score > best[0]):
+                best = (score, index, sentence)
+    if best is None:
+        return None
+    return f"The retrieved documents state: {best[2]} [{best[1]}]", best[1]
 
 def split_segments(project_id: str, document_id: str, content_hash: str,
                    segments: list[dict], version: str) -> list[dict]:
@@ -259,16 +303,22 @@ class SearchService:
             re.search(r"(?:\s*\[\d+\])+\s*[.!?]*$", block) for block in blocks
         )
         abstains = bool(re.search(r"\b(?:cannot find support|not enough information|not supported by|don't know)\b", answer, re.I))
-        # Qwen can occasionally omit citation markers altogether despite the
-        # instruction. Only in that case, attach the highest ranked passage when
-        # the generated answer demonstrably overlaps its source. Existing markers
-        # are never rewritten, so malformed or out-of-range citations still fail.
+        # If the local model omits citations, cite only sentences that can be
+        # matched to one retrieved passage by names, numbers, and meaningful terms.
+        # This prevents general model knowledge from being presented as document evidence.
         if answer and not numbers and not abstains:
-            answer_terms = set(re.findall(r"[a-z0-9]{4,}", answer.lower()))
-            source_terms = set(re.findall(r"[a-z0-9]{4,}", passages[0]["text"].lower()))
-            if len(answer_terms & source_terms) >= 2:
-                answer = f"{answer.rstrip()} [1]"
-                numbers = {1}
+            sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", answer) if part.strip()]
+            sentence_sources = [supporting_passage(sentence, passages) for sentence in sentences]
+            if sentences and all(source is not None for source in sentence_sources):
+                answer = " ".join(f"{sentence} [{source}]" for sentence, source in zip(sentences, sentence_sources))
+                numbers = {source for source in sentence_sources if source is not None}
+                blocks = [answer]
+                cited_throughout = True
+        if answer and not numbers and not abstains:
+            fallback = extractive_answer(question, passages)
+            if fallback:
+                answer, source = fallback
+                numbers = {source}
                 blocks = [answer]
                 cited_throughout = True
         if (not answer or not numbers or not cited_throughout or abstains

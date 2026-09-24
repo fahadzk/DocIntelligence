@@ -19,3 +19,7 @@ Ask receives at most five bounded project passages. The model is instructed to t
 ## Consequences
 
 Keyword search works immediately and offline. Semantic search and Ask need a first-time download, then work offline. English-only embeddings, small-model reasoning limits, CPU latency, complex document reading order, and no OCR are known limitations. Derived indexes can be rebuilt without touching originals or existing projects. Packaging the Python runtime and local model dependencies into an installer remains a release-phase task.
+
+## Grounding correction
+
+When the local model omits citations, the application no longer attaches the highest-ranked passage based on broad overlap. It checks each generated sentence against a specific retrieved passage using meaningful terms, named entities, and numbers. If that check fails but the question has a directly matching source sentence, the application presents that source sentence verbatim with its citation. Otherwise it returns an unsupported state.

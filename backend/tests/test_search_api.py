@@ -88,6 +88,15 @@ def test_answer_citations_are_validated(client):
     assert body["answer"].endswith("[1]")
     assert body["evidence"][0]["number"] == 1
 
+    class HallucinatedLLM:
+        ready = True
+        def answer(self, _system, _prompt):
+            return "Europa is a moon of Mars and its capital is Olympus."
+
+    service.llm = HallucinatedLLM()
+    body = client.post(f"/api/projects/{first}/ask", json={"question": "What does Europa orbit?"}).json()
+    assert not body["supported"]
+    assert body["evidence"] == []
     class InvalidLLM:
         ready = True
         def answer(self, _system, _prompt):
