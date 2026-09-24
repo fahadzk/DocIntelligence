@@ -1,5 +1,6 @@
 """Optional, app-managed CPU models. No hosted inference calls."""
 from pathlib import Path
+import threading
 from typing import Protocol
 
 
@@ -49,6 +50,7 @@ class LocalEmbeddings:
 class LocalLLM:
     def __init__(self, directory: Path):
         self.directory = directory
+        self._generation_lock = threading.Lock()
         self.path = directory / LLM_FILENAME
         self._model = None
 
@@ -65,6 +67,10 @@ class LocalLLM:
             raise RuntimeError("The downloaded answer model is incomplete.")
 
     def answer(self, system: str, prompt: str) -> str:
+        with self._generation_lock:
+            return self._answer(system, prompt)
+
+    def _answer(self, system: str, prompt: str) -> str:
         if not self.ready:
             raise RuntimeError("The answer model has not been downloaded.")
         if self._model is None:
@@ -73,11 +79,12 @@ class LocalLLM:
                 raise InsufficientMemoryError("At least 2.5 GB of free memory is needed to load the local answer model. Close other applications and try again; Search remains available.")
             from llama_cpp import Llama
             self._model = Llama(model_path=str(self.path), n_ctx=4096, n_threads=2,
-                                n_gpu_layers=0, verbose=False)
+                                n_gpu_layers=0, chat_format="chatml", verbose=False)
+        self._model.reset()
         response = self._model.create_chat_completion(
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": prompt}],
-            temperature=0.1, max_tokens=350)
+            temperature=0.0, max_tokens=300, seed=42)
         return str(response["choices"][0]["message"]["content"] or "")
 
 

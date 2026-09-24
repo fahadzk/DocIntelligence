@@ -48,7 +48,7 @@ export function SearchWorkspace({ project, mode, active = true }: { project: Pro
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!query.trim()) return;
+    if (loading || !query.trim()) return;
     setLoading(true); setError(undefined); setSearched(true); setAnswer(undefined); setResults([]);
     try {
       if (mode === "ask") setAnswer(await searchApi.ask(project.id, query.trim()));
@@ -79,11 +79,11 @@ export function SearchWorkspace({ project, mode, active = true }: { project: Pro
     {indexes.length > 0 && relevant.length === 0 && <p>There are no readable documents yet. Scanned or failed files cannot be searched.</p>}
     <form className="search-form" onSubmit={(event) => void submit(event)}>
       <label htmlFor={queryId}>{mode === "ask" ? "Question" : "Search terms"}</label>
-      <div><input id={queryId} className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === "ask" ? "What do these documents say about…" : "Search this project"} /><Button variant="primary" disabled={loading || !query.trim() || (mode === "ask" && model?.status !== "ready")}>{mode === "ask" ? "Ask" : "Search"}</Button></div>
+      <div><input id={queryId} disabled={loading} className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === "ask" ? "What do these documents say about…" : "Search this project"} /><Button variant="primary" disabled={loading || !query.trim() || (mode === "ask" && model?.status !== "ready")}>{mode === "ask" ? "Ask" : "Search"}</Button></div>
     </form>
     {error && <ErrorState message={error} retry={() => { setError(undefined); }} />}
     {loading ? <LoadingState label={mode === "ask" ? "Reading evidence and drafting an answer…" : "Searching passages…"} /> : mode === "search" ? searched && results.length === 0 ? <p className="search-empty">No matching readable passages found. Try different terms or add documents.</p> : <div className="evidence-list">{results.map((item) => <Source key={item.id} projectId={project.id} passage={item} />)}</div> :
-      answer && <div className="answer-panel"><h3>{answer.supported ? "Answer" : "Not enough evidence"}</h3><p className="answer-text">{answer.answer.split(/(\[\d+\])/g).map((part, index) => {
+      answer && <div className="answer-panel"><h3>{answer.supported ? "Answer" : "Unable to verify an answer"}</h3><p className="answer-text">{answer.answer.split(/(\[\d+\])/g).map((part, index) => {
         const number = /^\[(\d+)\]$/.exec(part)?.[1];
         return number && answer.evidence.some((item) => item.number === Number(number))
           ? <button className="citation-link" key={index} aria-label={`View source ${number}`} onClick={() => { const target = document.getElementById(`evidence-${number}`); target?.scrollIntoView({ behavior: "smooth", block: "center" }); target?.focus(); }}>{part}</button>

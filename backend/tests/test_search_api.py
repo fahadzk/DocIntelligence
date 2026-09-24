@@ -70,7 +70,7 @@ def test_answer_citations_are_validated(client):
     class ParagraphCitedLLM:
         ready = True
         def answer(self, _system, _prompt):
-            return "Europa orbits Jupiter. It is a moon in the retrieved source [1]."
+            return "Europa orbits Jupiter, according to the document [1]."
 
     service.llm = ParagraphCitedLLM()
     body = client.post(f"/api/projects/{first}/ask", json={"question": "What does Europa orbit?"}).json()
@@ -80,7 +80,7 @@ def test_answer_citations_are_validated(client):
     class UnmarkedButGroundedLLM:
         ready = True
         def answer(self, _system, _prompt):
-            return "Europa orbits Jupiter, according to the retrieved document."
+            return "Europa orbits Jupiter, according to the retrieved document. [1]"
 
     service.llm = UnmarkedButGroundedLLM()
     body = client.post(f"/api/projects/{first}/ask", json={"question": "What does Europa orbit?"}).json()
@@ -184,3 +184,27 @@ def test_keyword_index_can_be_rebuilt(client):
         time.sleep(0.1)
     assert recovered.status_code == 200
     assert recovered.json()["results"]
+
+
+def test_repair_attempt_does_not_replace_generated_answer_with_quote(client):
+    project = make_project(client, "Repair")
+    add(client, project, "facts.txt", "Europa orbits Jupiter.")
+    service = get_search_service()
+
+    class RepairLLM:
+        ready = True
+        calls = 0
+
+        def answer(self, system, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                return "Europa orbits Mars [1]."
+            assert "unsupported_claim" in prompt
+            return "Europa orbits Jupiter. [1]"
+
+    model = RepairLLM()
+    service.llm = model
+    response = service.ask(UUID(project), "Which planet does Europa orbit?")
+    assert model.calls == 2
+    assert response["answer"] == "Europa orbits Jupiter. [1]"
+    assert response["supported"]
