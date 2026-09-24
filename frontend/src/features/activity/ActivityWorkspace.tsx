@@ -9,15 +9,15 @@ import type { Project } from "../../types/projects";
 const intervals = [0, 5, 10, 15, 30, 60];
 function detail(value: unknown) { return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? String(value) : JSON.stringify(value); }
 
-export function ActivityWorkspace({ project }: { project: Project }) {
+export function ActivityWorkspace({ project, active = true }: { project: Project; active?: boolean }) {
   const saved = Number(localStorage.getItem("document-intelligence.activity-refresh") ?? "5");
   const [refreshSeconds, setRefreshSeconds] = useState(intervals.includes(saved) ? saved : 5);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const load = useCallback(async () => { try { setError(undefined); setEvents(await activityApi.list(project.id)); } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to load activity."); } finally { setLoading(false); } }, [project.id]);
-  useEffect(() => { setLoading(true); void load(); }, [load]);
-  useEffect(() => { localStorage.setItem("document-intelligence.activity-refresh", String(refreshSeconds)); if (!refreshSeconds) return; const timer = window.setInterval(() => void load(), refreshSeconds * 1000); return () => window.clearInterval(timer); }, [refreshSeconds, load]);
+  useEffect(() => { if (!active) return; setLoading(true); void load(); }, [load, active]);
+  useEffect(() => { localStorage.setItem("document-intelligence.activity-refresh", String(refreshSeconds)); if (!active || !refreshSeconds) return; const timer = window.setInterval(() => void load(), refreshSeconds * 1000); return () => window.clearInterval(timer); }, [refreshSeconds, load, active]);
   const status = useMemo(() => refreshSeconds ? `Refreshing every ${refreshSeconds} seconds` : "Automatic refresh is off", [refreshSeconds]);
   return <section className="activity-workspace">
     <div className="documents-heading"><div><p className="eyebrow">Project / Activity</p><h2>Processing activity</h2><p>Operational steps, timings, storage targets, and errors for this project. Document text and questions are not recorded.</p></div><Button variant="quiet" onClick={() => void load()}>Refresh now</Button></div>

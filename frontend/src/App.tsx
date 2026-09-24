@@ -41,6 +41,6 @@ function ProjectWorkspace({ project, onEdit }: { project: Project; onEdit: () =>
     <nav className="workspace-tabs" aria-label="Project sections">
       {(["documents", "search", "ask", "activity"] as const).map((tab) => <button key={tab} aria-current={section === tab ? "page" : undefined} onClick={() => setSection(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}
     </nav>
-    {section === "documents" ? <DocumentsWorkspace key={project.id} project={project} /> : section === "activity" ? <ActivityWorkspace key={project.id} project={project} /> : <SearchWorkspace key={project.id + section} project={project} mode={section} />}
+    <div hidden={section !== "documents"}><DocumentsWorkspace key={project.id} project={project} /></div><div hidden={section !== "search"}><SearchWorkspace key={project.id + "search"} project={project} mode="search" active={section === "search"} /></div><div hidden={section !== "ask"}><SearchWorkspace key={project.id + "ask"} project={project} mode="ask" active={section === "ask"} /></div><div hidden={section !== "activity"}><ActivityWorkspace key={project.id} project={project} active={section === "activity"} /></div>
   </section>;
 }

@@ -25,8 +25,9 @@ function Source({ projectId, passage, number }: { projectId: string; passage: Pa
   </article>;
 }
 
-export function SearchWorkspace({ project, mode }: { project: Project; mode: "search" | "ask" }) {
+export function SearchWorkspace({ project, mode, active = true }: { project: Project; mode: "search" | "ask"; active?: boolean }) {
   const [query, setQuery] = useState("");
+  const queryId = mode === "ask" ? "project-ask-query" : "project-search-query";
   const [results, setResults] = useState<Passage[]>([]);
   const [answer, setAnswer] = useState<Answer>();
   const [models, setModels] = useState<Models>();
@@ -36,14 +37,14 @@ export function SearchWorkspace({ project, mode }: { project: Project; mode: "se
   const [searched, setSearched] = useState(false);
 
   useEffect(() => {
-    let active = true;
+    let mounted = true;
     const refresh = () => Promise.all([searchApi.models(), searchApi.status(project.id)])
-      .then(([nextModels, nextIndexes]) => { if (active) { setModels(nextModels); setIndexes(nextIndexes); } })
-      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Unable to load search status."); });
+      .then(([nextModels, nextIndexes]) => { if (mounted) { setModels(nextModels); setIndexes(nextIndexes); } })
+      .catch((cause) => { if (mounted) setError(cause instanceof Error ? cause.message : "Unable to load search status."); });
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 2500);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [project.id]);
+    const timer = active ? window.setInterval(() => void refresh(), 2500) : undefined;
+    return () => { mounted = false; if (timer !== undefined) window.clearInterval(timer); };
+  }, [project.id, active]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -77,8 +78,8 @@ export function SearchWorkspace({ project, mode }: { project: Project; mode: "se
     {pending.length > 0 && <div className="index-notice" role="status">{pending.some((item) => item.status === "indexing") ? "Indexing readable documents…" : `${pending.length} readable document(s) need indexing.`}</div>}
     {indexes.length > 0 && relevant.length === 0 && <p>There are no readable documents yet. Scanned or failed files cannot be searched.</p>}
     <form className="search-form" onSubmit={(event) => void submit(event)}>
-      <label htmlFor="project-query">{mode === "ask" ? "Question" : "Search terms"}</label>
-      <div><input id="project-query" className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === "ask" ? "What do these documents say about…" : "Search this project"} /><Button variant="primary" disabled={loading || !query.trim() || (mode === "ask" && model?.status !== "ready")}>{mode === "ask" ? "Ask" : "Search"}</Button></div>
+      <label htmlFor={queryId}>{mode === "ask" ? "Question" : "Search terms"}</label>
+      <div><input id={queryId} className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === "ask" ? "What do these documents say about…" : "Search this project"} /><Button variant="primary" disabled={loading || !query.trim() || (mode === "ask" && model?.status !== "ready")}>{mode === "ask" ? "Ask" : "Search"}</Button></div>
     </form>
     {error && <ErrorState message={error} retry={() => { setError(undefined); }} />}
     {loading ? <LoadingState label={mode === "ask" ? "Reading evidence and drafting an answer…" : "Searching passages…"} /> : mode === "search" ? searched && results.length === 0 ? <p className="search-empty">No matching readable passages found. Try different terms or add documents.</p> : <div className="evidence-list">{results.map((item) => <Source key={item.id} projectId={project.id} passage={item} />)}</div> :
