@@ -19,3 +19,7 @@ Models are downloaded on request into `data/models/` (or the configured model di
 ## Boundaries
 
 Embedding, LLM, and vector-store adapters are kept in `infrastructure/local_models.py`; application services depend on their focused methods. Reranking and hosted providers are not implemented.
+
+## Project activity records
+
+SQLite migration version 4 adds `activity_logs`. The application records durable, project-scoped operational events rather than raw document content. Document lifecycle records cover validation, retained-original persistence, extraction, content artifact persistence, and failures. Search records keyword/semantic retrieval configuration and counts. Index records include the fixed sliding-window chunking configuration (900 characters, 120-character overlap, whitespace boundary after 550 characters), FastEmbed model, Chroma, SQLite FTS5, passage counts, and elapsed time. Ask records retrieval, llama.cpp generation, citation validation, and total time. `GET /api/projects/{project_id}/activity` exposes typed entries; the React Activity tab polls this endpoint by a user-configurable 5–60 second interval or on demand.

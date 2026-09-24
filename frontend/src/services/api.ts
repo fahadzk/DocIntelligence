@@ -1,6 +1,7 @@
 import type { Project } from "../types/projects";
 import type { DocumentItem, ImportOutcome, Segment } from "../types/documents";
 import type { Answer, IndexState, ModelState, Models, Passage } from "../types/search";
+import type { ActivityEvent } from "../types/activity";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -33,6 +34,10 @@ export const documentsApi = {
   },
   originalUrl: (projectId: string, id: string, page?: number) =>
     `${API_URL}/api/projects/${projectId}/documents/${id}/original${page ? `#page=${page}` : ""}`
+};
+
+export const activityApi = {
+  list: (projectId: string) => request<ActivityEvent[]>(`/api/projects/${projectId}/activity`)
 };
 
 export const searchApi = {

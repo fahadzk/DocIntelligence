@@ -25,3 +25,9 @@ Use **Search** to find passages immediately by exact terms. The optional local s
 Files and extracted artifacts are stored in the configured `DOCUMENT_INTELLIGENCE_DATA_DIR` (default: project `data/` during development). The original source file remains untouched. The import limit defaults to 50 MB and is configurable with `DOCUMENT_INTELLIGENCE_MAX_DOCUMENT_BYTES`.
 
 SQLite stores project/document metadata, source-located passages, and the FTS5 keyword index. Chroma vectors and downloaded models live under `data/vectors/` and `data/models/`. The **Rebuild index** action in Search safely regenerates passage and vector indexes from retained extracted text. Scanned PDFs and other files without usable text remain excluded until OCR is added in a later phase.
+
+## Activity dashboard
+
+Each project includes an **Activity** tab. It records structured operational events for document upload and persistence, extraction, chunking, local embeddings, SQLite FTS5, Chroma storage, search retrieval, and local answer generation. Entries include safe metadata such as storage provider, chunking configuration, counts, success or error state, and elapsed time. Document text, prompts, and answers are not saved in the activity log.
+
+The tab refreshes every 5 seconds by default. Choose 10, 15, 30, or 60 seconds, or disable automatic refresh and use **Refresh now**. The preference is stored locally in the desktop UI. Activity records are project-scoped and retained in SQLite with project deletion.

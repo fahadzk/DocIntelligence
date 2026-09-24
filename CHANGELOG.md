@@ -19,3 +19,8 @@
 - Initialized the local-first Electron, React, and FastAPI application shell.
 - Added SQLite-backed project CRUD APIs and frontend workspace UI.
 - Added backend health/readiness lifecycle and foundational tests.
+
+## Unreleased
+
+- Added a project Activity dashboard with a configurable 5–60 second refresh rate, disabled mode, and manual refresh.
+- Added durable structured activity events for import, extraction, chunking parameters, FastEmbed/Chroma embeddings, SQLite FTS5 indexing, hybrid search, and local Ask generation/citation validation.

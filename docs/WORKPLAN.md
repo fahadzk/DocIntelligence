@@ -30,3 +30,8 @@
 
 - OCR and research-intelligence workflows
 - Packaged installer validation
+
+## Post-Phase 3 observability
+
+- [x] Add project-scoped activity logging for local document, retrieval, and answer operations.
+- [x] Add configurable Activity dashboard refresh and durable event persistence.

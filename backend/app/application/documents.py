@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import sqlite3
+from time import perf_counter
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -20,12 +21,13 @@ SUPPORTED = {"pdf", "docx", "txt", "md"}
 
 
 class DocumentService:
-    def __init__(self, repository: SqliteDocumentRepository, projects: SqliteProjectRepository, extractor: Extractor, data_dir: Path, max_bytes: int):
+    def __init__(self, repository: SqliteDocumentRepository, projects: SqliteProjectRepository, extractor: Extractor, data_dir: Path, max_bytes: int, activity=None):
         self.repository = repository
         self.projects = projects
         self.extractor = extractor
         self.storage = data_dir / "documents"
         self.max_bytes = max_bytes
+        self.activity = activity
         self.on_ready = None
         self.on_delete = None
         self.repository.interrupt_incomplete()
@@ -33,6 +35,10 @@ class DocumentService:
     def require_project(self, project_id: UUID) -> None:
         if self.projects.get(project_id) is None:
             raise DocumentError("PROJECT_NOT_FOUND", "The requested project could not be found.", 404)
+
+    def _log(self, project_id: UUID, action: str, message: str, **kwargs) -> None:
+        if self.activity:
+            self.activity.record(project_id, action, message, **kwargs)
 
     def _directory(self, project_id: UUID, document_id: UUID) -> Path:
         return self.storage / str(project_id) / str(document_id)
@@ -62,6 +68,8 @@ class DocumentService:
 
     def register(self, project_id: UUID, upload: UploadFile) -> Document:
         self.require_project(project_id)
+        started = perf_counter()
+        self._log(project_id, "import.received", "Received document upload for validation")
         filename = (upload.filename or "").replace(chr(92), "/").split("/")[-1].strip()
         file_type = Path(filename).suffix.lower().lstrip(".")
         if file_type == "markdown":
@@ -103,8 +111,10 @@ class DocumentService:
                 self.repository.create(document)
             except sqlite3.IntegrityError as error:
                 raise DocumentError("DUPLICATE_DOCUMENT", "This file is already in the project.", 409) from error
+            self._log(project_id, "import.persisted", "Stored original and document metadata", document_id=document_id, details={"file_type": file_type, "size_bytes": size, "database": "SQLite", "storage": "project filesystem"}, duration_ms=round((perf_counter() - started) * 1000))
             return document
         except Exception:
+            self._log(project_id, "import.failed", "Document import failed", duration_ms=round((perf_counter() - started) * 1000), level="error")
             shutil.rmtree(directory, ignore_errors=True)
             raise
 
@@ -112,13 +122,17 @@ class DocumentService:
         document = self.repository.get(project_id, document_id)
         if document is None:
             return
+        started = perf_counter()
+        self._log(project_id, "extraction.started", "Started text extraction", document_id=document_id, details={"file_type": document.file_type})
         try:
             result = self.extractor.extract(self._original(document), document.file_type)
+            self._log(project_id, "extraction.completed", "Extracted readable text and source locations", document_id=document_id, details={"segments": len(result.segments), "page_count": result.page_count, "file_type": document.file_type}, duration_ms=round((perf_counter() - started) * 1000))
             content = self._content(document)
             temporary = content.with_suffix(".tmp")
             temporary.write_text(json.dumps({"segments": result.segments}, ensure_ascii=False), encoding="utf-8")
             os.replace(temporary, content)
             self.repository.update(project_id, document_id, "ready", "complete", page_count=result.page_count)
+            self._log(project_id, "content.persisted", "Saved extracted content artifact and ready state", document_id=document_id, details={"database": "SQLite", "artifact": "content.json"}, duration_ms=round((perf_counter() - started) * 1000))
             if self.on_ready:
                 self.on_ready(project_id, document_id)
         except DocumentError as error:

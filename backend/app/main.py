@@ -11,8 +11,10 @@ from fastapi.responses import JSONResponse
 from app.application.projects import ProjectService
 from app.application.documents import DocumentService
 from app.application.search import SearchService
+from app.application.activity import ActivityService
 from app.config.settings import get_settings
 from app.domain.documents import DocumentError
+from app.infrastructure.activity_repository import ActivityRepository
 from app.infrastructure.extractors import LocalExtractor
 from app.infrastructure.sqlite_document_repository import SqliteDocumentRepository
 from app.infrastructure.sqlite_project_repository import SqliteProjectRepository
@@ -31,6 +33,12 @@ def get_project_service() -> ProjectService:
 
 
 @lru_cache
+def get_activity_service() -> ActivityService:
+    settings = get_settings()
+    return ActivityService(ActivityRepository(settings.database_path), SqliteProjectRepository(settings.database_path))
+
+
+@lru_cache
 def get_document_service() -> DocumentService:
     settings = get_settings()
     return DocumentService(
@@ -39,6 +47,7 @@ def get_document_service() -> DocumentService:
         LocalExtractor(),
         settings.data_dir,
         settings.max_document_bytes,
+        get_activity_service(),
     )
 
 
@@ -46,7 +55,8 @@ def get_document_service() -> DocumentService:
 def get_search_service() -> SearchService:
     settings = get_settings()
     documents = get_document_service()
-    service = SearchService(documents, SearchRepository(settings.database_path), settings.data_dir, settings.model_dir)
+    service = SearchService(documents, SearchRepository(settings.database_path), settings.data_dir, settings.model_dir,
+                            activity=get_activity_service())
     def schedule_index(project_id, document_id):
         threading.Thread(target=service.index_document, args=(project_id, document_id),
                          daemon=True, name=f"index-{document_id}").start()
@@ -116,7 +126,9 @@ def health() -> dict[str, str]:
 from app.api.projects import router as projects_router  # noqa: E402
 from app.api.documents import router as documents_router  # noqa: E402
 from app.api.search import router as search_router, models_router  # noqa: E402
+from app.api.activity import router as activity_router  # noqa: E402
 app.include_router(projects_router)
 app.include_router(documents_router)
 app.include_router(search_router)
 app.include_router(models_router)
+app.include_router(activity_router)
