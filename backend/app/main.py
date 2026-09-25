@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 from app.application.projects import ProjectService
 from app.application.documents import DocumentService
 from app.application.search import SearchService
+from app.application.lab_search import LabSearchService
+from app.application.pipeline_config import PipelineConfigService
+from app.plugins.registry import PluginRegistry
 from app.config.settings import get_settings
 from app.domain.documents import DocumentError
 from app.infrastructure.operational_logging import OperationalLogger
@@ -64,12 +67,47 @@ def get_search_service() -> SearchService:
     return service
 
 
+@lru_cache
+def get_plugin_registry() -> PluginRegistry:
+    return PluginRegistry.discover()
+
+
+@lru_cache
+def get_pipeline_config() -> PipelineConfigService:
+    return PipelineConfigService(SearchRepository(get_settings().database_path), get_plugin_registry())
+
+
+@lru_cache
+def get_lab_search_service() -> LabSearchService:
+    documents = get_document_service()
+    config = get_pipeline_config()
+    lab = LabSearchService(get_search_service(), config, get_plugin_registry(), get_settings().data_dir)
+    config.on_document_change = lab.schedule_project
+    get_search_service().on_embeddings_ready = lab.rebuild_all
+    get_search_service().on_answers_ready = lab.rebuild_all
+    standard_ready = documents.on_ready
+    standard_delete = documents.on_delete
+    def on_ready(project_id, document_id):
+        if standard_ready:
+            standard_ready(project_id, document_id)
+        threading.Thread(target=lab.index_document, args=(project_id, document_id),
+                         daemon=True, name=f"lab-index-{document_id}").start()
+    def on_delete(project_id, document_id):
+        if standard_delete:
+            standard_delete(project_id, document_id)
+        lab.remove_document(project_id, document_id)
+    documents.on_ready = on_ready
+    documents.on_delete = on_delete
+    return lab
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     get_operational_logger()
     get_project_service()
     get_document_service()
     search_service = get_search_service()
+    get_lab_search_service()
     threading.Thread(target=search_service.ensure_indexes, daemon=True, name="index-recovery").start()
     logger.info("Document Intelligence backend started")
     yield
@@ -77,12 +115,12 @@ async def lifespan(_: FastAPI):
     logger.info("Document Intelligence backend stopped")
 
 
-app = FastAPI(title="Document Intelligence", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Document Intelligence", version="0.4.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:5174"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -127,7 +165,9 @@ def health() -> dict[str, str]:
 from app.api.projects import router as projects_router  # noqa: E402
 from app.api.documents import router as documents_router  # noqa: E402
 from app.api.search import router as search_router, models_router  # noqa: E402
+from app.api.pipeline import router as pipeline_router  # noqa: E402
 app.include_router(projects_router)
 app.include_router(documents_router)
 app.include_router(search_router)
 app.include_router(models_router)
+app.include_router(pipeline_router)

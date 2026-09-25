@@ -2,6 +2,8 @@
 
 Document Intelligence is a local desktop application. Electron owns the application lifecycle and starts the local FastAPI process. It waits for `GET /health` before loading the React UI.
 
+The React shell uses a persistent project/workspace sidebar. Standard Documents, Search, and Ask stay separate from the advanced Pipeline Lab, while a shared evidence component presents source metadata and navigation consistently. Fluent System Icons are wrapped by one icon component. Semantic CSS tokens in `frontend/src/styles/global.css` define light/dark palettes; `useAppearance` stores `light`, `dark`, or `system` in localStorage and follows OS changes in System mode. Appearance never changes backend configuration or project data.
+
 `frontend/` is a React + TypeScript Vite application. It only accesses application data through HTTP APIs. `electron/` contains only desktop lifecycle concerns. `backend/app/api` handles HTTP and Pydantic contracts; `application` contains use cases; `domain` holds core concepts; and `infrastructure` contains persistence adapters.
 
 SQLite stores project and document metadata. Migration version 2 adds the `documents` table without replacing existing projects. A one-time migration also imports project rows from the former `backend/data` development location into the canonical `data/` database. Original files and extracted JSON segments live under `data/documents/<project ID>/<document ID>/` and are never stored as database blobs.
@@ -18,7 +20,13 @@ Models are downloaded on request into `data/models/` (or the configured model di
 
 ## Boundaries
 
-Embedding, LLM, and vector-store adapters are kept in `infrastructure/local_models.py`; application services depend on their focused methods. Reranking and hosted providers are not implemented.
+Local embedding, LLM, and vector-store adapters are kept in `infrastructure/local_models.py`; application services depend on their focused methods. Pipeline Lab adds bundled retrieval/reranking strategies and optional hosted LLM adapters without changing the Standard path.
+
+## Pipeline Lab
+
+Migration v5 adds project overrides and separate Lab passage, FTS5, and index-state tables. Lab vectors use a separate Chroma collection. `config/pipeline_defaults.py` holds the current Standard baseline; `PipelineConfigService` validates, persists, and resolves optional project overrides. `PluginRegistry` discovers only bundled Python modules at startup and returns safe metadata and field schemas. React caches this registry once per application session and renders controls from the selected plugin schema. `LabSearchService` extends the same indexing/search/Ask service path with a separate storage profile. Document-setting hashes determine Lab index compatibility; changed settings schedule reindexing from retained `content.json`. The shared embedding runtime and process-wide Chroma client initialization are serialized so Standard and Lab background index tasks cannot race local model or vector-store setup.
+
+Cloud LLM adapters are optional Lab providers. Their credentials use the OS vault via `keyring` and are never returned by API endpoints. The provider list and model identifiers are discovered from the provider's API. Lab source-backed answers pass the existing citation validator, while optional model-background text is labeled separately. Standard still uses local Qwen and its original APIs. ADR-005 records the decision and corrects older ADR-003 statements about Ask's evidence count and fallback behavior.
 
 ## Background operational logging
 

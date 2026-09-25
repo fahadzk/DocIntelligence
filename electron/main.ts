@@ -3,12 +3,23 @@ import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 
+// Desktop VMs and remote sessions can opt into an in-process software GPU.
+if (process.env.DOCUMENT_INTELLIGENCE_SOFTWARE_RENDERING === "1") {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  app.commandLine.appendSwitch("in-process-gpu");
+}
+
 const backendPort = Number(process.env.DOCUMENT_INTELLIGENCE_PORT ?? "8000");
 const BACKEND_URL = `http://127.0.0.1:${backendPort}`;
 let backend: ChildProcess | undefined;
 const projectRoot = path.resolve(__dirname, "..");
 const dataDir = process.env.DOCUMENT_INTELLIGENCE_DATA_DIR ??
   (app.isPackaged ? path.join(app.getPath("userData"), "data") : path.join(projectRoot, "data"));
+const electronProfile = path.join(dataDir, "electron-profile");
+fs.mkdirSync(electronProfile, { recursive: true });
+app.setPath("userData", electronProfile);
 
 async function waitForBackend(): Promise<void> {
   for (let attempt = 0; attempt < 120; attempt += 1) {

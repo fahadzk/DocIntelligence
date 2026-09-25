@@ -1,32 +1,36 @@
 """Recoverable indexing, hybrid retrieval, and citation-checked local answers."""
 import logging
+import re
+import sqlite3
 import threading
 from time import perf_counter
 from pathlib import Path
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from app.application.grounding import select_evidence, validate_answer
+from app.config.pipeline_defaults import DEFAULTS
 from app.domain.documents import DocumentError
 from app.infrastructure.local_models import (ChromaVectorStore, LocalEmbeddings,
                                              LocalLLM, InsufficientMemoryError, EMBED_MODEL, LLM_REPOSITORY)
 from app.infrastructure.search_repository import SearchRepository
 
 logger = logging.getLogger(__name__)
-CHUNK_VERSION = "segment-900-overlap-120-v1"
+CHUNK_VERSION = f"segment-{DEFAULTS['document']['chunking']['chunk_size']}-overlap-{DEFAULTS['document']['chunking']['overlap']}-v1"
 
 
 
 def split_segments(project_id: str, document_id: str, content_hash: str,
-                   segments: list[dict], version: str) -> list[dict]:
+                    segments: list[dict], version: str) -> list[dict]:
     passages = []
+    chunking = DEFAULTS["document"]["chunking"]
     for segment in segments:
         text = segment["text"]
         start = 0
         chunk = 0
         while start < len(text):
-            end = min(start + 900, len(text))
+            end = min(start + chunking["chunk_size"], len(text))
             if end < len(text):
-                boundary = text.rfind(" ", start + 550, end)
+                boundary = text.rfind(" ", start + chunking["boundary_search_start"], end)
                 if boundary > start:
                     end = boundary
             excerpt = text[start:end].strip()
@@ -42,7 +46,7 @@ def split_segments(project_id: str, document_id: str, content_hash: str,
                 })
             if end == len(text):
                 break
-            start = max(start + 1, end - 120)
+            start = max(start + 1, end - chunking["overlap"])
             chunk += 1
     return passages
 
@@ -94,9 +98,13 @@ class SearchService:
                     self.embeddings.provision()
                     self.setup_state[kind] = "ready"
                     self.rebuild_all()
+                    if getattr(self, "on_embeddings_ready", None):
+                        self.on_embeddings_ready()
                 else:
                     self.llm.provision()
                     self.setup_state[kind] = "ready"
+                    if getattr(self, "on_answers_ready", None):
+                        self.on_answers_ready()
             except Exception:
                 logger.exception("Local model setup failed: %s", kind)
                 self.setup_state[kind] = "failed"
@@ -158,14 +166,21 @@ class SearchService:
                 if error.code in ("DOCUMENT_NOT_FOUND", "PROJECT_NOT_FOUND"):
                     return
                 logger.exception("Indexing failed for document %s", document_id)
-                self.repository.mark(str(project_id), str(document_id), "failed", "indexing",
-                                     self.version, document.content_hash if "document" in locals() else "",
-                                     "Indexing failed. Rebuild this document's index.")
+                self._mark_index_failure(project_id, document_id, document.content_hash if "document" in locals() else "")
             except Exception:
+                try:
+                    self.documents.get(project_id, document_id)
+                except DocumentError:
+                    return  # A queued index task outlived a deleted document/project.
                 logger.exception("Indexing failed for document %s", document_id)
-                self.repository.mark(str(project_id), str(document_id), "failed", "indexing",
-                                     self.version, document.content_hash if "document" in locals() else "",
-                                     "Indexing failed. Rebuild this document's index.")
+                self._mark_index_failure(project_id, document_id, document.content_hash if "document" in locals() else "")
+
+    def _mark_index_failure(self, project_id: UUID, document_id: UUID, content_hash: str) -> None:
+        try:
+            self.repository.mark(str(project_id), str(document_id), "failed", "indexing",
+                                 self.version, content_hash, "Indexing failed. Rebuild this document's index.")
+        except sqlite3.IntegrityError:
+            logger.info("Index result discarded for removed document %s", document_id)
 
     def remove_document(self, project_id: UUID, document_id: UUID) -> None:
         self.repository.delete(str(project_id), str(document_id))
@@ -180,21 +195,21 @@ class SearchService:
         return self.repository.status(str(project_id))
 
     def search(self, project_id: UUID, query: str, document_id: UUID | None = None,
-               limit: int = 12) -> list[dict]:
+               limit: int = DEFAULTS["search"]["result_limit"]) -> list[dict]:
         self.documents.require_project(project_id)
         started = perf_counter()
         self._log(project_id, "search.started", "Started project-scoped hybrid retrieval", details={"keyword_index": "SQLite FTS5", "semantic_enabled": self.embeddings.ready, "vector_store": "Chroma"})
         if not query.strip():
             return []
         try:
-            keyword = self.repository.keyword(str(project_id), query)
+            keyword = self.repository.keyword(str(project_id), query, DEFAULTS["search"]["keyword_candidates"])
         except Exception:
             logger.exception("Keyword index query failed")
             raise DocumentError("INDEX_UNAVAILABLE", "Search index is unavailable. Rebuild the index.", 503)
         semantic: list[str] = []
         if self.embeddings.ready:
             try:
-                semantic = self.vectors.search(str(project_id), self.embeddings.embed([query])[0], 30)
+                semantic = self.vectors.search(str(project_id), self.embeddings.embed([query])[0], DEFAULTS["search"]["semantic_candidates"])
             except Exception:
                 logger.exception("Semantic search failed; keyword results remain available")
                 self.setup_state["embeddings"] = "failed"
@@ -204,7 +219,7 @@ class SearchService:
         matches: dict[str, set[str]] = {}
         for source, ids in (("keyword", keyword), ("semantic", semantic)):
             for rank, passage_id in enumerate(ids):
-                ranks[passage_id] = ranks.get(passage_id, 0) + 1 / (40 + rank)
+                ranks[passage_id] = ranks.get(passage_id, 0) + 1 / (DEFAULTS["search"]["rrf_constant"] + rank)
                 matches.setdefault(passage_id, set()).add(source)
         results = []
         for passage_id in sorted(ranks, key=ranks.get, reverse=True):
@@ -226,11 +241,14 @@ class SearchService:
 
     def ask(self, project_id: UUID, question: str) -> dict:
         started = perf_counter()
+        lab = hasattr(self, "config_service")
+        options = self.config_service.effective(project_id)["ask"] if lab else DEFAULTS["ask"]
         self._log(project_id, "ask.started", "Started grounded answer workflow",
-                  details={"provider": "llama.cpp", "model": LLM_REPOSITORY})
-        if not self.llm.ready:
+                  details={"provider": options["provider"], "model": options["model"]})
+        if options["provider"] == "llamacpp" and not self.llm.ready:
             raise DocumentError("MODEL_NOT_READY", "Set up the local answer model to ask questions.", 409)
-        passages = select_evidence(question, self.search(project_id, question, limit=12))
+        passages = select_evidence(question, self.search(project_id, question, limit=options["evidence_candidates"]),
+                                   max_passages=options["evidence_count"], character_budget=options["evidence_characters"])
         if not passages:
             return {"answer": "I couldn't find evidence for this question in this project's readable documents.",
                     "supported": False, "evidence": []}
@@ -247,6 +265,13 @@ class SearchService:
             "Put a source citation such as [1] at the end of EACH sentence. "
             "If evidence only partly answers, explain that limit. "
             "If evidence does not answer the question, respond exactly: Insufficient evidence.")
+        if lab:
+            styles = {"concise": "two or three concise sentences", "detailed": "a detailed but focused paragraph",
+                      "bullet_summary": "short bullet points", "research": "a careful research summary with explicit limits"}
+            system += f" Format your answer as {styles[options['answer_style']]}."
+            if options["grounding"] == "sources_plus_model":
+                system += (" As an exception to the source-only rule, you may use general model knowledge only as a separately labeled supplement after the cited source answer. "
+                           "Begin that supplement with 'Model knowledge (not verified by documents):'. Never attach a source citation to model knowledge.")
         prompt = f"Evidence:\n{evidence}\n\nQuestion: {question}\n\nGive a short answer with source citations:"
         reason = "unvalidated"
         for attempt in range(2):
@@ -254,16 +279,29 @@ class SearchService:
                       details={"attempt": attempt + 1, "model": LLM_REPOSITORY})
             try:
                 generation_started = perf_counter()
-                answer = self.llm.answer(system, prompt).strip()
+                if options["provider"] == "llamacpp":
+                    answer = (self.llm.answer(system, prompt, options) if lab else self.llm.answer(system, prompt)).strip()
+                else:
+                    provider = self.registry.get("llm_providers", options["provider"]).implementation()
+                    answer = provider.answer(system, prompt, options["model"], options["temperature"],
+                                             options["max_output_tokens"]).strip()
                 self._log(project_id, "ask.generated", "Local generation completed",
                           details={"attempt": attempt + 1, "characters": len(answer)},
                           duration_ms=round((perf_counter() - generation_started) * 1000))
             except InsufficientMemoryError as error:
                 raise DocumentError("MODEL_MEMORY_LOW", str(error), 503) from error
+            except DocumentError:
+                raise
             except Exception:
                 logger.exception("Local answer generation failed")
                 raise DocumentError("ANSWER_FAILED", "The local model could not finish an answer. Please retry.", 503)
-            valid, reason, numbers = validate_answer(answer, passages)
+            background = None
+            supported_answer = answer
+            if lab and options["grounding"] == "sources_plus_model" and "Model knowledge (not verified by documents):" in answer:
+                supported_answer, background = answer.split("Model knowledge (not verified by documents):", 1)
+                supported_answer = supported_answer.strip()
+                background = background.strip() or None
+            valid, reason, numbers = validate_answer(supported_answer, passages)
             self._log(project_id, "ask.validation", "Checked generated claims and citation references",
                       details={"attempt": attempt + 1, "valid": valid, "reason": reason},
                       duration_ms=round((perf_counter() - started) * 1000))
@@ -277,7 +315,15 @@ class SearchService:
                 self._log(project_id, "ask.completed", "Returned locally generated answer",
                           details={"citations": len(cited), "supported": True},
                           duration_ms=round((perf_counter() - started) * 1000))
-                return {"answer": answer, "supported": True, "evidence": cited}
+                response = {"answer": supported_answer if options["require_citations"] else re.sub(r"\[\d+\]", "", supported_answer).strip(),
+                            "supported": True, "evidence": cited}
+                if lab:
+                    response["background"] = background
+                    response["context"] = [{"document": item["display_name"], "label": item["label"],
+                                            "chunk_id": item["id"], "text": item["text"],
+                                            "characters": len(item["text"]), "page_number": item["page_number"]}
+                                           for item in passages]
+                return response
             if reason == 'insufficient_evidence':
                 break
             prompt += ("\n\nYour previous attempt failed validation: " + reason +

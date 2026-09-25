@@ -9,16 +9,17 @@ def terms(text: str) -> set[str]:
             if word.lower() not in STOP}
 
 
-def select_evidence(question: str, candidates: list[dict]) -> list[dict]:
+def select_evidence(question: str, candidates: list[dict], max_passages: int = 3,
+                    character_budget: int = 4800) -> list[dict]:
     query = terms(question)
     ranked = sorted(enumerate(candidates), key=lambda item: (
         -len(query & terms(item[1]['text'])), item[0]))
     if ranked and query & terms(ranked[0][1]['text']):
         ranked = [item for item in ranked if query & terms(item[1]['text'])]
     selected = []
-    budget = 4800
+    budget = character_budget
     for _, passage in ranked:
-        if len(selected) >= 3:
+        if len(selected) >= max_passages:
             break
         if any(passage['document_id'] == old['document_id']
                and passage['segment_index'] == old['segment_index']

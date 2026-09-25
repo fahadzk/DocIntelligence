@@ -1,1 +1,1 @@
-export function LoadingState({ label = "Loading workspace…" }: { label?: string }) { return <div className="loading-state" role="status"><span className="spinner" />{label}</div>; }
+export function LoadingState({ label = "Loading workspace…" }: { label?: string }) { return <div className="loading-state" role="status"><span className="spinner" aria-hidden="true" />{label}</div>; }

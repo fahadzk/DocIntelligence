@@ -22,6 +22,14 @@
 
 ## Unreleased
 
+- Added a persistent collapsible sidebar with hover/keyboard peek, a top-of-workspace pin control, independently scrolling projects, always-visible Settings, and thin scrollbars.
+- Reduced collapsed-sidebar clutter to the active project icon, which also opens the full project switcher; the project scrollbar is hidden until the sidebar expands.
+- Refined the desktop interface with Fluent System Icons, compact project navigation, shared evidence presentation, semantic design tokens, and live Light/Dark/System appearance settings.
+- Improved document rows, source reading, Pipeline Lab configuration controls and default indicators, dialogs, empty/error states, and narrow-window layouts without changing backend pipeline behavior.
 - Replaced the Activity dashboard, API, and SQLite event writes with background JSON Lines operational logs.
 - Added queue-based rotating file logging for import, extraction, chunking parameters, FastEmbed/Chroma embeddings, SQLite FTS5 indexing, hybrid search, and local Ask generation/citation validation.
-- Corrected automatic answer citation recovery so model knowledge cannot be shown as document evidence; unsupported claims are rejected and source-matching fallback answers are extractive.
+- Tightened answer citation validation; unsupported generated claims return an honest unsupported state after one repair attempt.
+- Added Pipeline Lab with schema-driven built-in plugins, project overrides, chunk preview, separate Lab indexes, configurable retrieval, Ask context inspection, and optional OS-vault cloud providers.
+- Centralized current Standard pipeline defaults and kept Standard indexing/search/Ask isolated from Lab experiments.
+- Added debounced Pipeline Lab autosave with visible status and retry, preserved Lab state when switching workbenches, reduced idle Search/Ask polling, and refreshed the responsive interface with a neutral-and-blue Fluent-inspired palette.
+- Serialized the shared local embedding runtime and Chroma client initialization across Standard and Lab to prevent concurrent index-start failures; queued Standard index tasks now exit cleanly if their document is deleted.

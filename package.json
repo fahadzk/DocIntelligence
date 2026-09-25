@@ -41,6 +41,7 @@
     "wait-on": "^8.0.2"
   },
   "dependencies": {
+    "@fluentui/react-icons": "^2.0.341",
     "@vitejs/plugin-react": "^4.4.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

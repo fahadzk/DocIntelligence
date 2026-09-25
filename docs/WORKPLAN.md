@@ -35,3 +35,12 @@
 
 - [x] Add background JSON Lines operational logging for document, retrieval, and answer operations.
 - [x] Keep operational file I/O off request and processing threads with queue-based logging.
+
+## Pipeline Lab
+
+- [x] Centralize current Standard defaults and add validated, project-scoped overrides.
+- [x] Discover and validate bundled plugin metadata; render Lab controls from schemas.
+- [x] Separate Lab passages, FTS, vectors, and index state from Standard.
+- [x] Add document preview, configurable Lab retrieval and Ask context inspection.
+- [x] Add optional OS-vault cloud credentials and provider model discovery.
+- [x] Cover registry, configuration, isolation, chunking, citations, UI fields, and desktop switching.

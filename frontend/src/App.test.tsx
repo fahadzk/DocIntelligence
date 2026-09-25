@@ -17,8 +17,10 @@ test("creates and renames a project", async () => {
     throw new Error(`Unexpected request: ${url}`);
   }));
   render(<App />);
-  expect(await screen.findByText("Your research begins with a project.")).toBeInTheDocument();
-  fireEvent.click(screen.getByText("+ New project"));
+  expect(await screen.findByText("Start with a project")).toBeInTheDocument();
+  fireEvent.click(screen.getByText("New project"));
+  expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
+  expect(screen.getByPlaceholderText("e.g. Case Files")).toHaveFocus();
   fireEvent.change(screen.getByPlaceholderText("e.g. Case Files"), { target: { value: "Research" } });
   fireEvent.click(screen.getByText("Create project"));
   expect(await screen.findByRole("heading", { name: "Research", level: 1 })).toBeInTheDocument();
@@ -26,6 +28,50 @@ test("creates and renames a project", async () => {
   fireEvent.change(screen.getByDisplayValue("Research"), { target: { value: "Renamed" } });
   fireEvent.click(screen.getByText("Save changes"));
   expect(await screen.findByRole("heading", { name: "Renamed", level: 1 })).toBeInTheDocument();
+  const newProjectButton = screen.getByRole("button", { name: "New project" });
+  newProjectButton.focus();
+  fireEvent.click(newProjectButton);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(newProjectButton).toHaveFocus();
+});
+
+test("changes and persists appearance preference", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.endsWith("/api/projects")) return reply([]);
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  window.localStorage.removeItem("document-intelligence.theme");
+  render(<App />);
+  await screen.findByText("Start with a project");
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("radio", { name: /Dark/ }));
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(window.localStorage.getItem("document-intelligence.theme")).toBe("dark");
+  fireEvent.click(screen.getByRole("radio", { name: /Light/ }));
+  expect(document.documentElement.dataset.theme).toBe("light");
+});
+
+test("pins and collapses the sidebar without losing navigation", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.endsWith("/api/projects")) return reply([project]);
+    if (url.includes("/documents")) return reply([]);
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  window.localStorage.removeItem("document-intelligence.sidebar-pinned");
+  const view = render(<App />);
+  await screen.findByRole("button", { name: "Documents" });
+  fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+  expect(view.container.querySelector(".app-shell")).toHaveClass("sidebar-unpinned");
+  expect(screen.getByRole("button", { name: "Switch project, current Research" })).toBeInTheDocument();
+  expect(window.localStorage.getItem("document-intelligence.sidebar-pinned")).toBe("false");
+  expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  view.unmount();
+  const reopened = render(<App />);
+  expect(reopened.container.querySelector(".app-shell")).toHaveClass("sidebar-unpinned");
+  fireEvent.click(await screen.findByRole("button", { name: "Switch project, current Research" }));
+  expect(reopened.container.querySelector(".app-shell")).not.toHaveClass("sidebar-unpinned");
+  expect(window.localStorage.getItem("document-intelligence.sidebar-pinned")).toBe("true");
 });
 
 test("imports and reads a document in the project workspace", async () => {
@@ -72,6 +118,10 @@ test("searches and opens cited evidence in the project workspace", async () => {
   fireEvent.click(screen.getAllByRole("button", { name: /^Ask$/ }).at(-1)!);
   expect(await screen.findByText("Supporting passages")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "View source 1" })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Question"), { target: { value: "Which moon?" } });
+  expect(screen.getByLabelText("Question")).toHaveValue("Which moon?");
+  fireEvent.click(screen.getAllByRole("button", { name: /^Ask$/ }).at(-1)!);
+  expect(await screen.findByText("Supporting passages")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^Search$/ }));
   expect(await screen.findByPlaceholderText("Search this project")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^Ask$/ }));

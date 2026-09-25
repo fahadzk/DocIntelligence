@@ -2,11 +2,12 @@
 from pathlib import Path
 import threading
 from typing import Protocol
+from app.config.pipeline_defaults import DEFAULTS
 
 
-EMBED_MODEL = "BAAI/bge-small-en-v1.5"
-LLM_REPOSITORY = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
-LLM_FILENAME = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+EMBED_MODEL = DEFAULTS["document"]["embedding"]["model"]
+LLM_REPOSITORY = DEFAULTS["ask"]["model_repository"]
+LLM_FILENAME = DEFAULTS["ask"]["model"]
 
 
 class InsufficientMemoryError(RuntimeError):
@@ -25,6 +26,7 @@ class LocalEmbeddings:
     def __init__(self, directory: Path):
         self.directory = directory
         self._model = None
+        self._embedding_lock = threading.Lock()
 
     @property
     def ready(self) -> bool:
@@ -40,11 +42,12 @@ class LocalEmbeddings:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not self.ready:
             raise RuntimeError("The semantic search model has not been downloaded.")
-        if self._model is None:
-            from fastembed import TextEmbedding
-            self._model = TextEmbedding(model_name=EMBED_MODEL, cache_dir=str(self.directory),
-                                        threads=2, local_files_only=True)
-        return [vector.tolist() for vector in self._model.embed(texts)]
+        with self._embedding_lock:
+            if self._model is None:
+                from fastembed import TextEmbedding
+                self._model = TextEmbedding(model_name=EMBED_MODEL, cache_dir=str(self.directory),
+                                            threads=2, local_files_only=True)
+            return [vector.tolist() for vector in self._model.embed(texts)]
 
 
 class LocalLLM:
@@ -66,25 +69,28 @@ class LocalLLM:
         if not self.ready:
             raise RuntimeError("The downloaded answer model is incomplete.")
 
-    def answer(self, system: str, prompt: str) -> str:
+    def answer(self, system: str, prompt: str, options: dict | None = None) -> str:
         with self._generation_lock:
-            return self._answer(system, prompt)
+            return self._answer(system, prompt, options)
 
-    def _answer(self, system: str, prompt: str) -> str:
+    def _answer(self, system: str, prompt: str, options: dict | None = None) -> str:
         if not self.ready:
             raise RuntimeError("The answer model has not been downloaded.")
         if self._model is None:
             import psutil
-            if psutil.virtual_memory().available < 2_500_000_000:
+            if psutil.virtual_memory().available < DEFAULTS["ask"]["minimum_free_bytes"]:
                 raise InsufficientMemoryError("At least 2.5 GB of free memory is needed to load the local answer model. Close other applications and try again; Search remains available.")
             from llama_cpp import Llama
-            self._model = Llama(model_path=str(self.path), n_ctx=4096, n_threads=2,
-                                n_gpu_layers=0, chat_format="chatml", verbose=False)
+            self._model = Llama(model_path=str(self.path), n_ctx=(options or {}).get("context_tokens", DEFAULTS["ask"]["context_tokens"]),
+                                n_threads=DEFAULTS["ask"]["threads"], n_gpu_layers=DEFAULTS["ask"]["gpu_layers"],
+                                chat_format=DEFAULTS["ask"]["chat_format"], verbose=False)
         self._model.reset()
         response = self._model.create_chat_completion(
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": prompt}],
-            temperature=0.0, max_tokens=300, seed=42)
+            temperature=(options or {}).get("temperature", DEFAULTS["ask"]["temperature"]),
+            max_tokens=(options or {}).get("max_output_tokens", DEFAULTS["ask"]["max_output_tokens"]),
+            seed=(options or {}).get("seed", DEFAULTS["ask"]["seed"]))
         return str(response["choices"][0]["message"]["content"] or "")
 
 
@@ -96,16 +102,23 @@ class VectorStore(Protocol):
 
 
 class ChromaVectorStore:
-    def __init__(self, directory: Path):
+    # Chroma maintains a process-wide client registry per persistence path. Creating
+    # Standard and Lab collections concurrently can race that registry on Windows.
+    _client_lock = threading.Lock()
+
+    def __init__(self, directory: Path, collection_name: str = "bge_small_en_v15_chunk_v1"):
         self.directory = directory
+        self.collection_name = collection_name
         self._collection = None
 
     def collection(self):
         if self._collection is None:
-            import chromadb
-            self.directory.mkdir(parents=True, exist_ok=True)
-            client = chromadb.PersistentClient(path=str(self.directory))
-            self._collection = client.get_or_create_collection("bge_small_en_v15_chunk_v1")
+            with self._client_lock:
+                if self._collection is None:
+                    import chromadb
+                    self.directory.mkdir(parents=True, exist_ok=True)
+                    client = chromadb.PersistentClient(path=str(self.directory))
+                    self._collection = client.get_or_create_collection(self.collection_name)
         return self._collection
 
     def upsert(self, ids: list[str], texts: list[str], vectors: list[list[float]],
@@ -118,8 +131,13 @@ class ChromaVectorStore:
 
     def search(self, project_id: str, vector: list[float], limit: int) -> list[str]:
         result = self.collection().query(query_embeddings=[vector], n_results=limit,
-                                         where={"project_id": project_id}, include=[])
+                                          where={"project_id": project_id}, include=[])
         return result["ids"][0]
+
+    def search_with_distances(self, project_id: str, vector: list[float], limit: int) -> list[tuple[str, float]]:
+        result = self.collection().query(query_embeddings=[vector], n_results=limit,
+                                         where={"project_id": project_id}, include=["distances"])
+        return list(zip(result["ids"][0], result["distances"][0]))
 
     def delete(self, project_id: str, document_id: str) -> None:
         self.collection().delete(where={"$and": [{"project_id": project_id},

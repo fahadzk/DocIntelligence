@@ -73,3 +73,25 @@ def migrate(database_path: Path) -> None:
             # Version 4 formerly created a UI activity table. Preserve the version marker
             # for existing databases, but new installations use file-based operational logs.
             connection.execute("PRAGMA user_version = 4")
+        if connection.execute("PRAGMA user_version").fetchone()[0] < 5:
+            connection.execute("""CREATE TABLE IF NOT EXISTS project_pipeline_config (
+                project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+                overrides_json TEXT NOT NULL, updated_at TEXT NOT NULL
+            )""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS lab_passages (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                segment_index INTEGER NOT NULL, chunk_index INTEGER NOT NULL,
+                label TEXT NOT NULL, page_number INTEGER, paragraph_number INTEGER,
+                start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL,
+                text TEXT NOT NULL, content_hash TEXT NOT NULL, index_version TEXT NOT NULL
+            )""")
+            connection.execute("CREATE INDEX IF NOT EXISTS lab_passages_project_idx ON lab_passages(project_id, document_id)")
+            connection.execute("CREATE VIRTUAL TABLE IF NOT EXISTS lab_passages_fts USING fts5(id UNINDEXED, project_id UNINDEXED, text, tokenize='unicode61')")
+            connection.execute("""CREATE TABLE IF NOT EXISTS lab_document_indexes (
+                document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                project_id TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL,
+                index_version TEXT NOT NULL, content_hash TEXT NOT NULL,
+                error_message TEXT, updated_at TEXT NOT NULL
+            )""")
+            connection.execute("PRAGMA user_version = 5")
