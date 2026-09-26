@@ -60,10 +60,9 @@ PLUGINS = [
     Plugin("lexical", "Term overlap", "Reorder candidates by matching query terms.", "rerankers", (),
            {"score": "matching_query_terms"}, strategies.lexical_rerank),
     Plugin("llamacpp", "Local Qwen / llama.cpp", "App-managed offline answer model.", "llm_providers", (
-        field("model", "Model", "select", options=["qwen2.5-1.5b-instruct-q4_k_m.gguf","qwen2.5-0.5b-instruct-q4_k_m.gguf"]),
+        field("model", "Model", "model_select"),
         field("temperature", "Temperature", "slider", min=0, max=1, step=0.05),
         field("max_output_tokens", "Maximum output tokens", "number", min=64, max=2048)),
-        {"local": True, "model_discovery": False, "temperature": True,
+        {"local": True, "model_discovery": True, "temperature": True,
          "streaming": False, "system_prompt": True}, LocalLLM),
 ]
-

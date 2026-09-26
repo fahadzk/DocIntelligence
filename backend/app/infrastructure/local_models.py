@@ -64,11 +64,17 @@ class LocalLLM:
 
     def ready_for(self, filename: str) -> bool:
         path = self.directory / filename
-        return path.is_file() and path.stat().st_size > 900_000_000
+        if not path.is_file() or path.stat().st_size == 0:
+            return False
+        try:
+            with path.open("rb") as model_file:
+                return model_file.read(4) == b"GGUF"
+        except OSError:
+            return False
 
     @property
     def ready(self) -> bool:
-        return self.ready_for(LLM_FILENAME)
+        return any(self.ready_for(filename) for filename in self.available_models())
 
     def provision(self) -> None:
         from huggingface_hub import hf_hub_download

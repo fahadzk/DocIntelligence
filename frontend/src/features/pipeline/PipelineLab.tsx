@@ -283,7 +283,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
         {cloud && <div className="lab-notice">This provider receives the selected passages and your question. Your API key stays in the operating system credential store. <Button onClick={() => setManageProviders((current) => !current)}>Manage Providers</Button></div>}
         {!cloud && models?.answers.status !== "ready" && <div className="lab-notice">The local answer model is not ready. Search remains available. {models?.answers.error && <span>{models.answers.error} </span>}<Button disabled={models?.answers.status === "downloading"} onClick={() => void searchApi.setup("answers").then(() => searchApi.models().then(setModels))}>{models?.answers.status === "downloading" ? "Downloading…" : "Set up local model"}</Button></div>}
         {cloud && <Button onClick={() => void refreshModels(effective.ask.provider)} disabled={busy}>Refresh Models</Button>}
-        {selectedProvider?.description && <p className="field-help">{selectedProvider.description}</p>}<SchemaFields plugin={selectedProvider} values={effective.ask} defaults={state.defaults.ask} models={providerModels} onChange={(key, value) => update(["ask", key], value)} /></div>
+        {selectedProvider?.description && <p className="field-help">{selectedProvider.description}</p>}<SchemaFields plugin={selectedProvider} values={effective.ask} defaults={state.defaults.ask} models={cloud ? providerModels : (models?.answers.models ?? [])} onChange={(key, value) => update(["ask", key], value)} /></div>
         <div><label>Grounding<select className="input" value={effective.ask.grounding} onChange={(event) => update(["ask", "grounding"], event.target.value)}><option value="sources_only">Sources Only</option><option value="sources_plus_model">Sources + Model Knowledge</option></select></label>
           <label>Evidence passages<input className="input" type="number" min={1} max={12} value={effective.ask.evidence_count} onChange={(event) => update(["ask", "evidence_count"], Number(event.target.value))} /></label>
           <label className="lab-toggle"><input type="checkbox" checked={effective.ask.require_citations} onChange={(event) => update(["ask", "require_citations"], event.target.checked)} />Require citations in answer</label>
@@ -298,6 +298,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
     {busy && <LoadingState label="Working on this experiment…" />}
   </section>;
 }
+
 
 
 

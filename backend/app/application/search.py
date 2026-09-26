@@ -87,12 +87,13 @@ class SearchService:
         return document_version(self.settings_for(project_id)) + ("+bge-small-en-v1.5" if self.embeddings.ready else "+keyword")
 
     def model_status(self) -> dict:
+        answers_ready = self.llm.ready
         return {
             "embeddings": {"status": self.setup_state["embeddings"],
                            "error": self.setup_error["embeddings"], "name": EMBED_MODEL,
                            "size_mb": 70, "source": "https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q"},
-            "answers": {"status": self.setup_state["answers"],
-                        "error": self.setup_error["answers"], "name": LLM_REPOSITORY,
+            "answers": {"status": "ready" if answers_ready else self.setup_state["answers"],
+                        "error": None if answers_ready else self.setup_error["answers"], "name": LLM_REPOSITORY,
                         "size_mb": 1070, "source": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF",
                         "models": [{"id": item, "name": item} for item in self.llm.available_models()]},
         }
