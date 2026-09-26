@@ -1,23 +1,23 @@
-# ADR-005: Standard defaults and isolated Pipeline Lab experiments
+# ADR-005: Project pipeline configuration and shared Ask providers
 
-**Status:** Accepted — 2026-09-24
+**Status:** Accepted ? 2026-09-26
 
 ## Context
 
-Technical users need to inspect and tune document, retrieval, and answer settings without changing the working Standard Workbench. The implementation, rather than older prose in ADR-003, is the source for current Standard values: Ask selects at most three passages, not five, and no longer falls back to an extractive quote after citation validation fails.
+Pipeline Lab is the advanced configuration surface for document chunking, retrieval, and answer generation. These are project settings: Basic Search and Ask must resolve the same saved settings so users do not get different answers or chunks depending on which workspace they opened. Reprocessing is required when document settings change; changing retrieval or answer settings takes effect on the next request.
 
 ## Decision
 
-`app.config.pipeline_defaults.DEFAULTS` records the current Standard values. Standard endpoints and UI keep their existing behavior and storage. `PipelineConfigService` resolves defaults plus validated, project-scoped Lab overrides from SQLite migration v5. The React application fetches built-in plugin metadata once per session and renders supported fields from each selected plugin's schema. Bundled Python modules are discovered and validated at backend startup. No external plugin installation or hot loading is supported.
+`app.config.pipeline_defaults.DEFAULTS` defines the defaults. `PipelineConfigService` stores validated overrides per project in SQLite. The Pipeline Lab exposes these settings and a single Save & Apply action. Applying document-pipeline changes rebuilds the shared document index from retained extracted content. Search and Ask changes are saved and used by subsequent operations without rewriting chunks.
 
-Lab passages, FTS5 rows, and index state use dedicated tables; vectors use a dedicated Chroma collection. A document setting hash forms the Lab index version. Changing document settings schedules reindexing from retained extracted content; search or Ask settings do not rewrite documents. Missing, failed, or outdated Lab indexes never pass live evidence validation. Original documents and extracted content remain the source of truth. Standard indexes are untouched by Lab overrides.
+The public grounded Ask workflow is `POST /api/projects/{project_id}/ask`. It retrieves evidence using that project's saved settings, generates through the selected provider, validates citations, and returns the same response shape to the Basic UI. Pipeline Lab no longer has a separate Ask route or Ask experiment form.
 
-Sliding-window chunking preserves the original 900-character/120-overlap Standard path. Lab includes paragraph-aware semantic boundaries using the installed FastEmbed model and bounded local-LLM paragraph boundaries. Both keep source-segment references. The Lab preview runs chunking without writing passages or vectors. The only currently registered embedding implementation is BGE Small/FastEmbed, and the only vector implementation is Chroma/L2; the interface lists only those implementations.
+LLM providers implement the same `answer(system, prompt, model, temperature, max_output_tokens)` and `models()` interface. The built-in local providers are llama.cpp and Ollama. Ollama discovers installed models through `/api/tags` and sends non-streaming chat requests to `http://localhost:11434/api/chat`, with the system and user messages and generation options in one adapter. OpenAI, Anthropic, and Google remain optional hosted providers; their API keys stay in the operating system credential vault. Hosted providers receive the selected evidence and question.
 
-Lab search can use keyword, semantic, or hybrid retrieval. RRF and weighted rank fusion operate on candidate ranks; weighted fusion scores are rank contributions, not normalized vector similarity. The optional lexical reranker uses query-term overlap. The inspector exposes actual FTS5 BM25, Chroma L2 distance, ranks, and computed fusion/reranker values only when present. Standard remains hybrid RRF with no reranker.
+Plugin metadata is bundled and discovered at backend startup. The UI renders supported settings from plugin schemas. External plugin installation and hot loading are not supported.
 
-Lab Ask shares the existing retrieval, evidence selection, generation, and citation validation path. The default local model remains Qwen2.5 1.5B through llama.cpp. Optional OpenAI, Anthropic, and Google providers use user-supplied credentials in the operating system credential vault via `keyring`; credentials are never returned to React or stored in SQLite. Provider model IDs are fetched from provider APIs. Source-backed claims must pass the same citation validator. Optional model-background text is labeled separately as unverified and never receives a document citation. Standard never selects a cloud provider.
+Pipeline Lab retains chunk preview and its diagnostic search/index facilities. Its configuration controls are project-scoped and the standard Basic Ask route consumes the same effective project settings. Citation validation always resolves live project-scoped passages; source locations must be preserved by chunkers.
 
 ## Consequences and limits
 
-Advanced cloud calls send the selected question and passage text to the chosen provider and may incur provider charges; the UI states this before use. No cloud service is required for Standard or local Lab operation. Semantic and LLM chunking need their local models provisioned. Source boundaries remain preserved so citations retain a single source location. Current citation checks are lexical heuristics, not entailment proofs. The existing packaging limitation (bundled Python runtime) remains.
+Changing chunking or embedding settings requires reindexing readable documents; changing retrieval or answer settings does not. Ollama must be running locally and the selected model must already be installed. Hosted providers may incur charges and receive document evidence. Citation checks are lexical heuristics, not proof of entailment. The default answer provider remains the app-managed llama.cpp model.

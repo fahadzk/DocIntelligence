@@ -38,9 +38,11 @@
 
 ## Pipeline Lab
 
-- [x] Centralize current Standard defaults and add validated, project-scoped overrides.
-- [x] Discover and validate bundled plugin metadata; render Lab controls from schemas.
-- [x] Separate Lab passages, FTS, vectors, and index state from Standard.
-- [x] Add document preview, configurable Lab retrieval and Ask context inspection.
-- [x] Add optional OS-vault cloud credentials and provider model discovery.
-- [x] Cover registry, configuration, isolation, chunking, citations, UI fields, and desktop switching.
+- [x] Centralize defaults and persist validated configuration overrides per project.
+- [x] Apply the selected project settings to the shared Basic Search and Ask workflows.
+- [x] Reindex readable documents after document pipeline settings change; apply retrieval and Ask settings on the next request.
+- [x] Render document, search, and answer configuration in separate tabs with one Save & Apply action.
+- [x] Use one grounded Ask API for Basic mode and selected local or hosted providers.
+- [x] Add local Ollama model discovery and non-streaming `/api/chat` generation.
+- [x] Keep optional hosted provider credentials in the OS credential store.
+- [x] Retain chunk preview and diagnostic retrieval/index views.

@@ -310,7 +310,7 @@ class SearchService:
 
     def ask(self, project_id: UUID, question: str) -> dict:
         started = perf_counter()
-        lab = self.config_service is not None
+        configured = self.config_service is not None
         options = self.settings_for(project_id)["ask"]
         self._log(project_id, "ask.started", "Started grounded answer workflow",
                   details={"provider": options["provider"], "model": options["model"]})
@@ -331,30 +331,34 @@ class SearchService:
             "Write a concise, grammatically correct answer of two or three sentences in your own words. "
             "Summarize what these documents say about the question. For who/what questions, describe the subject using the source rather than a general-knowledge definition. Include only facts explicitly supported by evidence. "
             "Do not add background knowledge, names, dates, places, or relationships absent from evidence. "
-            "Put a source citation such as [1] at the end of EACH sentence. "
             "If evidence only partly answers, explain that limit. "
             "If evidence does not answer the question, respond exactly: Insufficient evidence.")
-        if lab:
+        if options["require_citations"]:
+            system += " Put a source citation such as [1] at the end of EACH sentence."
+        else:
+            system += " Source citations are optional; keep every claim directly supported by the supplied evidence."
+        if configured:
             styles = {"concise": "two or three concise sentences", "detailed": "a detailed but focused paragraph",
                       "bullet_summary": "short bullet points", "research": "a careful research summary with explicit limits"}
             system += f" Format your answer as {styles[options['answer_style']]}."
             if options["grounding"] == "sources_plus_model":
                 system += (" As an exception to the source-only rule, you may use general model knowledge only as a separately labeled supplement after the cited source answer. "
                            "Begin that supplement with 'Model knowledge (not verified by documents):'. Never attach a source citation to model knowledge.")
-        prompt = f"Evidence:\n{evidence}\n\nQuestion: {question}\n\nGive a short answer with source citations:"
+        citation_request = " Include source citations." if options["require_citations"] else ""
+        prompt = f"Evidence:\n{evidence}\n\nQuestion: {question}\n\nGive a short answer{citation_request}:"
         reason = "unvalidated"
         for attempt in range(2):
-            self._log(project_id, "ask.generating", "Generating local answer",
-                      details={"attempt": attempt + 1, "model": LLM_REPOSITORY})
+            self._log(project_id, "ask.generating", "Generating answer",
+                      details={"attempt": attempt + 1, "provider": options["provider"], "model": options["model"]})
             try:
                 generation_started = perf_counter()
                 if options["provider"] == "llamacpp":
-                    answer = (self.llm.answer(system, prompt, options) if lab else self.llm.answer(system, prompt)).strip()
+                    answer = (self.llm.answer(system, prompt, options) if configured else self.llm.answer(system, prompt)).strip()
                 else:
                     provider = self.registry.get("llm_providers", options["provider"]).implementation()
                     answer = provider.answer(system, prompt, options["model"], options["temperature"],
                                              options["max_output_tokens"]).strip()
-                self._log(project_id, "ask.generated", "Local generation completed",
+                self._log(project_id, "ask.generated", "Answer generation completed",
                           details={"attempt": attempt + 1, "characters": len(answer)},
                           duration_ms=round((perf_counter() - generation_started) * 1000))
             except InsufficientMemoryError as error:
@@ -362,17 +366,19 @@ class SearchService:
             except DocumentError:
                 raise
             except Exception:
-                logger.exception("Local answer generation failed")
-                raise DocumentError("ANSWER_FAILED", "The local model could not finish an answer. Please retry.", 503)
+                logger.exception("Answer generation failed")
+                raise DocumentError("ANSWER_FAILED", "The selected answer provider could not finish an answer. Please retry.", 503)
             background = None
             supported_answer = answer
-            if lab and options["grounding"] == "sources_plus_model" and "Model knowledge (not verified by documents):" in answer:
+            if configured and options["grounding"] == "sources_plus_model" and "Model knowledge (not verified by documents):" in answer:
                 supported_answer, background = answer.split("Model knowledge (not verified by documents):", 1)
                 supported_answer = supported_answer.strip()
                 background = background.strip() or None
-            valid, reason, numbers = validate_answer(supported_answer, passages)
+            valid, reason, numbers = validate_answer(supported_answer, passages,
+                                                     require_citations=options["require_citations"])
             self._log(project_id, "ask.validation", "Checked generated claims and citation references",
-                      details={"attempt": attempt + 1, "valid": valid, "reason": reason},
+                      details={"attempt": attempt + 1, "valid": valid, "reason": reason,
+                               "citations_required": options["require_citations"]},
                       duration_ms=round((perf_counter() - started) * 1000))
             if valid:
                 cited = []
@@ -381,12 +387,12 @@ class SearchService:
                     if passage is None or passage['text'] != passages[number - 1]['text']:
                         raise DocumentError("EVIDENCE_CHANGED", "The source changed while answering. Please try again.", 409)
                     cited.append({"number": number, "passage": passage})
-                self._log(project_id, "ask.completed", "Returned locally generated answer",
+                self._log(project_id, "ask.completed", "Returned generated answer",
                           details={"citations": len(cited), "supported": True},
                           duration_ms=round((perf_counter() - started) * 1000))
                 response = {"answer": supported_answer if options["require_citations"] else re.sub(r"\[\d+\]", "", supported_answer).strip(),
                             "supported": True, "evidence": cited}
-                if lab:
+                if configured:
                     response["background"] = background
                     response["context"] = [{"document": item["display_name"], "label": item["label"],
                                             "chunk_id": item["id"], "text": item["text"],
@@ -395,13 +401,13 @@ class SearchService:
                 return response
             if reason == 'insufficient_evidence':
                 break
+            citation_retry = (" End each sentence with [source number]." if options["require_citations"]
+                              else " Do not add unsupported information.")
             prompt += ("\n\nYour previous attempt failed validation: " + reason +
-                       ". Try again in one or two short sentences using only explicit facts above. "
-                       "End each sentence with [source number]. If the question cannot be answered, say Insufficient evidence.")
+                       ". Try again in one or two short sentences using only explicit facts above." +
+                       citation_retry + " If the question cannot be answered, say Insufficient evidence.")
         self._log(project_id, "ask.completed", "No verified generated answer available",
                   details={"supported": False, "reason": reason},
                   duration_ms=round((perf_counter() - started) * 1000))
         return {"answer": "I couldn't produce a supported answer from these documents. Try a more specific question or review Search for relevant passages.",
                 "supported": False, "evidence": []}
-
-

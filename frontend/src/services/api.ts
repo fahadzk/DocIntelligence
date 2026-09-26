@@ -1,7 +1,7 @@
 ﻿import type { Project } from "../types/projects";
 import type { DocumentItem, ImportOutcome, Segment } from "../types/documents";
 import type { Answer, IndexState, ModelState, Models, Passage } from "../types/search";
-import type { Plugin, PipelineState, PipelineSettings, LabPassage, LabAnswer, ChunkPreview, LabIndexState } from "../types/pipeline";
+import type { Plugin, PipelineState, PipelineSettings, LabPassage, ChunkPreview, LabIndexState } from "../types/pipeline";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -59,7 +59,6 @@ export const pipelineApi = {
   indexStatus: (projectId: string) => request<LabIndexState[]>(`/api/projects/${projectId}/pipeline/index/status`),
   preview: (projectId: string, documentId: string) => request<ChunkPreview>(`/api/projects/${projectId}/pipeline/preview`, { method: "POST", body: JSON.stringify({ document_id: documentId }) }),
   search: (projectId: string, query: string) => request<{ results: LabPassage[] }>(`/api/projects/${projectId}/pipeline/search`, { method: "POST", body: JSON.stringify({ query }) }),
-  ask: (projectId: string, question: string) => request<LabAnswer>(`/api/projects/${projectId}/pipeline/ask`, { method: "POST", body: JSON.stringify({ question }) }),
   providers: () => request<{ id: string; configured: boolean }[]>("/api/providers"),
   saveCredential: (id: string, key: string) => request<{ configured: boolean }>(`/api/providers/${id}/credential`, { method: "PUT", body: JSON.stringify({ key }) }),
   removeCredential: (id: string) => request<{ configured: boolean }>(`/api/providers/${id}/credential`, { method: "DELETE" }),

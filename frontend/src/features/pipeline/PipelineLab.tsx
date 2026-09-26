@@ -7,7 +7,7 @@ import { LoadingState } from "../../components/LoadingState";
 import { documentsApi, pipelineApi, searchApi } from "../../services/api";
 import type { DocumentItem } from "../../types/documents";
 import type { Project } from "../../types/projects";
-import type { Plugin, PluginField, PipelineSettings, PipelineState, PipelineTab, ChunkPreview, LabPassage, LabAnswer, LabIndexState } from "../../types/pipeline";
+import type { Plugin, PluginField, PipelineSettings, PipelineState, PipelineTab, ChunkPreview, LabPassage, LabIndexState } from "../../types/pipeline";
 import type { Models } from "../../types/search";
 
 function automaticSaveEnabled() { return false; }
@@ -70,9 +70,6 @@ export function PipelineLab({ project, registry, registryError, active = true }:
   const [preview, setPreview] = useState<ChunkPreview>();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<LabPassage[]>();
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<LabAnswer>();
-  const [inspectContext, setInspectContext] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -108,6 +105,13 @@ export function PipelineLab({ project, registry, registryError, active = true }:
       }).catch((cause) => { if (live) setError(cause instanceof Error ? cause.message : "Pipeline Lab could not load."); });
     return () => { live = false; };
   }, [project.id]);
+
+  useEffect(() => {
+    if (!effective || (effective.ask.provider !== "ollama" && !["openai", "anthropic", "google"].includes(effective.ask.provider))) return;
+    let live = true;
+    void pipelineApi.models(effective.ask.provider).then((result) => { if (live) setProviderModels(result.models); }).catch(() => { if (live) setProviderModels([]); });
+    return () => { live = false; };
+  }, [effective?.ask.provider]);
 
   useEffect(() => {
     if (!effective || !providerModels.length) return;
@@ -196,7 +200,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
       return next;
     });
     setDirty(true); setSaveStatus("pending"); setError(undefined);
-    setPreview(undefined); setResults(undefined); setAnswer(undefined); setNotice(undefined);
+    setPreview(undefined); setResults(undefined); setNotice(undefined);
   }
 
   async function runPreview() {
@@ -215,13 +219,6 @@ export function PipelineLab({ project, registry, registryError, active = true }:
     finally { setBusy(false); }
   }
 
-  async function runAsk() {
-    if (!question.trim() || dirty) return;
-    setBusy(true); setError(undefined); setInspectContext(false);
-    try { setAnswer(await pipelineApi.ask(project.id, question.trim())); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Ask failed."); }
-    finally { setBusy(false); }
-  }
 
   async function refreshModels(id: string) {
     setBusy(true); setError(undefined);
@@ -251,6 +248,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
   const selectedReranker = pluginFor(registry, "rerankers", effective.search.reranker);
   const selectedProvider = pluginFor(registry, "llm_providers", effective.ask.provider);
   const cloud = selectedProvider?.capabilities.local === false;
+  const providerUsesRemoteModelList = cloud || effective.ask.provider === "ollama";
   const summary = [
     ["Document", selectedChunker?.name, `${effective.document.chunking.chunk_size} / ${effective.document.chunking.overlap}`, selectedEmbedding?.name, selectedStore?.name],
     ["Search", selectedRetrieval?.name, selectedFusion?.name, `${effective.search.semantic_candidates} semantic + ${effective.search.keyword_candidates} keyword`, `${effective.search.result_limit} results`],
@@ -272,28 +270,24 @@ export function PipelineLab({ project, registry, registryError, active = true }:
       {preview && <div className="lab-output"><h4>{preview.count} {preview.count === 1 ? "chunk" : "chunks"} · {preview.average_characters} characters on average</h4>{preview.samples.map((item) => <div key={item.id} className="lab-chunk"><strong>{item.label} · characters {item.start_offset}–{item.end_offset}</strong><p>{item.text}</p></div>)}</div>}
       <div className="lab-index"><h4>Lab index</h4>{indexes.filter((item) => item.document_status === "ready").map((item) => <p key={item.document_id}>{item.display_name}: {item.status ?? "pending"}{item.error_message ? ` · ${item.error_message}` : ""}</p>)}{indexes.some((item) => item.status === "failed") && <Button onClick={() => void pipelineApi.ensureIndex(project.id).then(() => pipelineApi.indexStatus(project.id)).then(setIndexes).catch((cause) => setError(String(cause)))}>Retry Lab index</Button>}</div>
     </div>}
-    {tab === "search" && <div className="lab-section"><h3>Search experiment</h3><div className="lab-control-grid"><div><label>Retrieval <span className="lab-default-badge">{effective.search.retrieval === state.defaults.search.retrieval ? "Default" : "Custom"}</span><select className="input" value={effective.search.retrieval} onChange={(event) => update(["search", "retrieval"], event.target.value)}>{registry.filter((item) => item.category === "retrieval").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedRetrieval?.description && <p className="field-help">{selectedRetrieval.description}</p>}<SchemaFields plugin={selectedRetrieval} values={effective.search} defaults={state.defaults.search} onChange={(key, value) => update(["search", key], value)} /></div>
+    {tab === "search" && <div className="lab-section"><h3>Search settings</h3><div className="lab-control-grid"><div><label>Retrieval <span className="lab-default-badge">{effective.search.retrieval === state.defaults.search.retrieval ? "Default" : "Custom"}</span><select className="input" value={effective.search.retrieval} onChange={(event) => update(["search", "retrieval"], event.target.value)}>{registry.filter((item) => item.category === "retrieval").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedRetrieval?.description && <p className="field-help">{selectedRetrieval.description}</p>}<SchemaFields plugin={selectedRetrieval} values={effective.search} defaults={state.defaults.search} onChange={(key, value) => update(["search", key], value)} /></div>
       <div>{effective.search.retrieval === "hybrid" && <><label>Fusion <span className="lab-default-badge">{effective.search.fusion === state.defaults.search.fusion ? "Default" : "Custom"}</span><select className="input" value={effective.search.fusion} onChange={(event) => update(["search", "fusion"], event.target.value)}>{registry.filter((item) => item.category === "fusion").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedFusion?.description && <p className="field-help">{selectedFusion.description}</p>}<SchemaFields plugin={selectedFusion} values={effective.search} defaults={state.defaults.search} onChange={(key, value) => update(["search", key], value)} /></>}
         <label>Reranking <span className="lab-default-badge">{effective.search.reranker === state.defaults.search.reranker ? "Default" : "Custom"}</span><select className="input" value={effective.search.reranker} onChange={(event) => update(["search", "reranker"], event.target.value)}>{registry.filter((item) => item.category === "rerankers").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedReranker?.description && <p className="field-help">{selectedReranker.description}</p>}<SchemaFields plugin={selectedReranker} values={effective.search} defaults={state.defaults.search} onChange={(key, value) => update(["search", key], value)} /></div></div>
       <form className="search-form" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}><label htmlFor="lab-query">Search this project</label><div><input id="lab-query" className="input" value={query} onChange={(event) => setQuery(event.target.value)} /><Button variant="primary" disabled={!query.trim() || dirty || busy}>Search</Button></div></form>
       {results && <div className="lab-output"><h4>{results.length ? `${results.length} ranked passages` : "No matching passages"}</h4>{results.map((item) => <PassageCard key={item.id} item={item} projectId={project.id} inspector />)}</div>}
     </div>}
-    {tab === "ask" && <div className="lab-section"><h3>Ask experiment</h3><div className="lab-retrieval-summary"><strong>Retrieval</strong><span>{selectedRetrieval?.name} · {selectedFusion?.name} · {effective.search.semantic_candidates} semantic + {effective.search.keyword_candidates} keyword · {effective.search.result_limit} results · Reranker {selectedReranker?.name}</span><Button variant="quiet" onClick={() => setTab("search")}>Edit Search Settings</Button></div>
-      <div className="lab-control-grid"><div><label>Provider<select className="input" value={effective.ask.provider} onChange={(event) => { const next = pluginFor(registry, "llm_providers", event.target.value); update(["ask", "provider"], event.target.value); update(["ask", "model"], next?.capabilities.local ? state.defaults.ask.model : ""); }}><optgroup label="Local">{registry.filter((item) => item.category === "llm_providers" && item.capabilities.local === true).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup><optgroup label="Cloud">{registry.filter((item) => item.category === "llm_providers" && item.capabilities.local === false).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup></select></label>
+    {tab === "ask" && <div className="lab-section"><h3>Answer settings</h3><div className="lab-retrieval-summary"><strong>Retrieval</strong><span>{selectedRetrieval?.name} · {selectedFusion?.name} · {effective.search.semantic_candidates} semantic + {effective.search.keyword_candidates} keyword · {effective.search.result_limit} results · Reranker {selectedReranker?.name}</span><Button variant="quiet" onClick={() => setTab("search")}>Edit Search Settings</Button></div>
+      <div className="lab-control-grid"><div><label>Provider<select className="input" value={effective.ask.provider} onChange={(event) => { update(["ask", "provider"], event.target.value); update(["ask", "model"], event.target.value === "llamacpp" ? state.defaults.ask.model : ""); }}><optgroup label="Local">{registry.filter((item) => item.category === "llm_providers" && item.capabilities.local === true).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup><optgroup label="Cloud">{registry.filter((item) => item.category === "llm_providers" && item.capabilities.local === false).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup></select></label>
         {cloud && <div className="lab-notice">This provider receives the selected passages and your question. Your API key stays in the operating system credential store. <Button onClick={() => setManageProviders((current) => !current)}>Manage Providers</Button></div>}
-        {!cloud && models?.answers.status !== "ready" && <div className="lab-notice">The local answer model is not ready. Search remains available. {models?.answers.error && <span>{models.answers.error} </span>}<Button disabled={models?.answers.status === "downloading"} onClick={() => void searchApi.setup("answers").then(() => searchApi.models().then(setModels))}>{models?.answers.status === "downloading" ? "Downloading…" : "Set up local model"}</Button></div>}
-        {cloud && <Button onClick={() => void refreshModels(effective.ask.provider)} disabled={busy}>Refresh Models</Button>}
-        {selectedProvider?.description && <p className="field-help">{selectedProvider.description}</p>}<SchemaFields plugin={selectedProvider} values={effective.ask} defaults={state.defaults.ask} models={cloud ? providerModels : (models?.answers.models ?? [])} onChange={(key, value) => update(["ask", key], value)} /></div>
+        {effective.ask.provider === "llamacpp" && models?.answers.status !== "ready" && <div className="lab-notice">The local answer model is not ready. Search remains available. {models?.answers.error && <span>{models.answers.error} </span>}<Button disabled={models?.answers.status === "downloading"} onClick={() => void searchApi.setup("answers").then(() => searchApi.models().then(setModels))}>{models?.answers.status === "downloading" ? "Downloading…" : "Set up local model"}</Button></div>}
+        {providerUsesRemoteModelList && <Button onClick={() => void refreshModels(effective.ask.provider)} disabled={busy}>Refresh Models</Button>}
+        {selectedProvider?.description && <p className="field-help">{selectedProvider.description}</p>}<SchemaFields plugin={selectedProvider} values={effective.ask} defaults={state.defaults.ask} models={providerUsesRemoteModelList ? providerModels : (models?.answers.models ?? [])} onChange={(key, value) => update(["ask", key], value)} /></div>
         <div><label>Grounding<select className="input" value={effective.ask.grounding} onChange={(event) => update(["ask", "grounding"], event.target.value)}><option value="sources_only">Sources Only</option><option value="sources_plus_model">Sources + Model Knowledge</option></select></label>
           <label>Evidence passages<input className="input" type="number" min={1} max={12} value={effective.ask.evidence_count} onChange={(event) => update(["ask", "evidence_count"], Number(event.target.value))} /></label>
           <label className="lab-toggle"><input type="checkbox" checked={effective.ask.require_citations} onChange={(event) => update(["ask", "require_citations"], event.target.checked)} />Require citations in answer</label>
           <label>Answer style<select className="input" value={effective.ask.answer_style} onChange={(event) => update(["ask", "answer_style"], event.target.value)}><option value="concise">Concise</option><option value="detailed">Detailed</option><option value="bullet_summary">Bullet Summary</option><option value="research">Research</option></select></label></div></div>
       {manageProviders && <div className="lab-provider-manager"><h4>Manage Providers</h4><label>Provider<select className="input" value={credentialProvider} onChange={(event) => setCredentialProvider(event.target.value)}>{providers.map((item) => <option key={item.id} value={item.id}>{pluginFor(registry, "llm_providers", item.id)?.name ?? item.id}{item.configured ? " · configured" : ""}</option>)}</select></label><label>API key<input className="input" type="password" autoComplete="off" value={credential} onChange={(event) => setCredential(event.target.value)} /></label><div className="lab-provider-actions"><Button onClick={() => void saveCredential()} disabled={!credential || busy}>Save key</Button><Button onClick={() => void pipelineApi.testProvider(credentialProvider).then((result) => setNotice(`Connected · ${result.model_count} models available`)).catch((cause) => setError(String(cause)))} disabled={busy}>Test Connection</Button><Button onClick={() => void refreshModels(credentialProvider)} disabled={busy}>Refresh Models</Button><Button variant="quiet" onClick={() => void pipelineApi.removeCredential(credentialProvider).then(() => pipelineApi.providers().then(setProviders))}>Remove key</Button></div></div>}
-      <form className="search-form" onSubmit={(event) => { event.preventDefault(); void runAsk(); }}><label htmlFor="lab-question">Question</label><div><input id="lab-question" className="input" value={question} onChange={(event) => setQuestion(event.target.value)} /><Button variant="primary" disabled={!question.trim() || !effective.ask.model || dirty || busy || (!cloud && models?.answers.status !== "ready")}>Ask</Button></div></form>
-      {answer && <div className="lab-output"><h4>{answer.supported ? "Answer" : "Unable to verify an answer"}</h4><p className="lab-answer">{answer.answer.split(/(\[\d+\])/g).map((part, index) => { const number = /^\[(\d+)\]$/.exec(part)?.[1]; return number && answer.evidence.some((entry) => entry.number === Number(number)) ? <button key={index} className="citation-link" onClick={() => { const target = document.getElementById(`lab-evidence-${number}`); target?.scrollIntoView({ behavior: "smooth", block: "center" }); target?.focus(); }}>{part}</button> : <span key={index}>{part}</span>; })}</p>{answer.background && <div className="lab-background"><strong>Model knowledge · not verified by documents</strong><p>{answer.background}</p></div>}
-        {answer.context && <><Button onClick={() => setInspectContext((current) => !current)}>{inspectContext ? "Hide Context" : "Inspect Context"}</Button>{inspectContext && <div className="lab-context">{answer.context.map((item) => <article key={item.chunk_id}><strong>{item.document} · {item.label}</strong><small>Chunk {item.chunk_id} · {item.characters} characters</small><p>{item.text}</p></article>)}</div>}</>}
-        {answer.evidence.length > 0 && <><h4>Supporting passages</h4>{answer.evidence.map((entry) => <PassageCard key={entry.passage.id} number={entry.number} item={entry.passage as LabPassage} projectId={project.id} />)}</>}
-      </div>}
+
     </div>}
     {busy && <LoadingState label="Working on this experiment…" />}
   </section>;

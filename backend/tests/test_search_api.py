@@ -54,7 +54,7 @@ def test_answer_citations_are_validated(client):
 
     class FakeLLM:
         ready = True
-        def answer(self, system, prompt):
+        def answer(self, system, prompt, options=None):
             assert "untrusted data" in system
             assert "Europa orbits Jupiter" in prompt
             return "Europa orbits Jupiter [1]."
@@ -69,7 +69,7 @@ def test_answer_citations_are_validated(client):
 
     class ParagraphCitedLLM:
         ready = True
-        def answer(self, _system, _prompt):
+        def answer(self, _system, _prompt, options=None):
             return "Europa orbits Jupiter, according to the document [1]."
 
     service.llm = ParagraphCitedLLM()
@@ -79,7 +79,7 @@ def test_answer_citations_are_validated(client):
 
     class UnmarkedButGroundedLLM:
         ready = True
-        def answer(self, _system, _prompt):
+        def answer(self, _system, _prompt, options=None):
             return "Europa orbits Jupiter, according to the retrieved document. [1]"
 
     service.llm = UnmarkedButGroundedLLM()
@@ -90,7 +90,7 @@ def test_answer_citations_are_validated(client):
 
     class HallucinatedLLM:
         ready = True
-        def answer(self, _system, _prompt):
+        def answer(self, _system, _prompt, options=None):
             return "Europa is a moon of Mars and its capital is Olympus."
 
     service.llm = HallucinatedLLM()
@@ -99,7 +99,7 @@ def test_answer_citations_are_validated(client):
     assert body["evidence"] == []
     class InvalidLLM:
         ready = True
-        def answer(self, _system, _prompt):
+        def answer(self, _system, _prompt, options=None):
             return "Unsupported claim [9]."
 
     service.llm = InvalidLLM()
@@ -109,7 +109,7 @@ def test_answer_citations_are_validated(client):
 
     class PartlyUncitedLLM:
         ready = True
-        def answer(self, _system, _prompt):
+        def answer(self, _system, _prompt, options=None):
             return "Europa orbits Jupiter [1]. An unrelated assertion."
 
     service.llm = PartlyUncitedLLM()
@@ -118,7 +118,7 @@ def test_answer_citations_are_validated(client):
 
     class LowMemoryLLM:
         ready = True
-        def answer(self, _system, _prompt):
+        def answer(self, _system, _prompt, options=None):
             raise InsufficientMemoryError("At least 2.5 GB of free memory is needed.")
 
     service.llm = LowMemoryLLM()
@@ -195,7 +195,7 @@ def test_repair_attempt_does_not_replace_generated_answer_with_quote(client):
         ready = True
         calls = 0
 
-        def answer(self, system, prompt):
+        def answer(self, system, prompt, options=None):
             self.calls += 1
             if self.calls == 1:
                 return "Europa orbits Mars [1]."

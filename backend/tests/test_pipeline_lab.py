@@ -27,7 +27,7 @@ def test_plugin_discovery_validation_and_defaults():
     registry = PluginRegistry.discover()
     listed = registry.public()
     assert {item["id"] for item in listed if item["category"] == "chunking"} == {"sliding_window", "semantic", "llm"}
-    assert {item["id"] for item in listed if item["category"] == "llm_providers"} == {"llamacpp", "openai", "anthropic", "google"}
+    assert {item["id"] for item in listed if item["category"] == "llm_providers"} == {"llamacpp", "ollama", "openai", "anthropic", "google"}
     assert registry.get("fusion", "rrf").implementation(0, {"rrf_constant": 40}, "keyword") == 1 / 40
     assert resolve() == DEFAULTS
     assert resolve({"search": {"retrieval": "keyword"}})["search"]["retrieval"] == "keyword"
@@ -108,26 +108,26 @@ def test_semantic_and_llm_chunkers_preserve_offsets():
     assert len(chunks) == 2
 
 
-def test_lab_ask_returns_real_context_and_citations(client):
+def test_shared_ask_api_returns_citations_for_pipeline_settings(client):
     pid = project(client)
     doc = document(client, pid, text="Europa orbits Jupiter.")
-    from app.main import get_lab_search_service
-    lab = get_lab_search_service()
-    lab.ensure_project(UUID(pid))
+    from app.main import get_search_service
+    service = get_search_service()
+    service.ensure_indexes()
+
     class Model:
         ready = True
         def answer(self, system, prompt, options):
             assert "Europa orbits Jupiter" in prompt
             assert options["temperature"] == 0.0
             return "Europa orbits Jupiter [1]."
-    lab.llm = Model()
-    response = client.post(f"/api/projects/{pid}/pipeline/ask", json={"question": "What does Europa orbit?"})
+
+    service.llm = Model()
+    response = client.post(f"/api/projects/{pid}/ask", json={"question": "What does Europa orbit?"})
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["supported"]
     assert body["evidence"][0]["passage"]["document_id"] == doc
-    assert body["context"][0]["chunk_id"] == body["evidence"][0]["passage"]["id"]
-    assert body["context"][0]["text"] == "Europa orbits Jupiter."
 
 
 def test_cloud_credentials_never_return_secret(monkeypatch):
@@ -197,27 +197,29 @@ def test_provider_api_never_echoes_credential(client, monkeypatch):
     assert client.get("/api/providers").json()[0] == {"id": "openai", "configured": True}
 
 
-def test_lab_grounding_modes_keep_document_citations_valid(client):
+def test_shared_ask_api_honors_optional_citations_and_grounding(client):
     pid = project(client, "Grounding")
     document(client, pid, text="Europa orbits Jupiter.")
-    from app.main import get_lab_search_service, get_pipeline_config
-    lab = get_lab_search_service()
-    lab.ensure_project(UUID(pid))
+    from app.main import get_search_service, get_pipeline_config
+    service = get_search_service()
+    service.ensure_indexes()
+
     class Model:
         ready = True
         def answer(self, system, prompt, options):
+            assert "citations are optional" in system.lower()
             return ("Europa orbits Jupiter [1].\n\n"
                     "Model knowledge (not verified by documents): Europa is an icy moon.")
-    lab.llm = Model()
+
+    service.llm = Model()
     get_pipeline_config().save(UUID(pid), {"ask": {"grounding": "sources_plus_model",
                                                  "require_citations": False}})
-    response = client.post(f"/api/projects/{pid}/pipeline/ask", json={"question": "What does Europa orbit?"})
+    response = client.post(f"/api/projects/{pid}/ask", json={"question": "What does Europa orbit?"})
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["supported"]
     assert "[1]" not in body["answer"]
     assert body["evidence"][0]["passage"]["document_id"]
-    assert body["background"] == "Europa is an icy moon."
 
 
 def test_standard_and_lab_serialize_chroma_collection_initialization(tmp_path, monkeypatch):

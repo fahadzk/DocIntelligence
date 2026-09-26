@@ -1,4 +1,4 @@
-"""Pipeline Lab contracts; Standard endpoints remain unchanged."""
+"""Pipeline configuration and provider-management API contracts."""
 from uuid import UUID
 import threading
 
@@ -26,10 +26,6 @@ class PreviewRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     document_id: UUID | None = None
-
-
-class AskRequest(BaseModel):
-    question: str = Field(min_length=3, max_length=500)
 
 
 class CredentialRequest(BaseModel):
@@ -79,11 +75,6 @@ def search(project_id: UUID, body: SearchRequest, lab: LabSearchService = Depend
     return {"results": lab.search(project_id, body.query, body.document_id)}
 
 
-@router.post("/api/projects/{project_id}/pipeline/ask")
-def ask(project_id: UUID, body: AskRequest, lab: LabSearchService = Depends(get_lab_search_service)):
-    return lab.ask(project_id, body.question)
-
-
 def provider(provider_id: str, registry: PluginRegistry) -> CloudProvider:
     registry.get("llm_providers", provider_id)
     if provider_id not in HOSTS:
@@ -118,4 +109,5 @@ def test_provider(provider_id: str, registry: PluginRegistry = Depends(get_plugi
 
 @router.get("/api/providers/{provider_id}/models")
 def provider_models(provider_id: str, registry: PluginRegistry = Depends(get_plugin_registry)):
-    return {"models": provider(provider_id, registry).models()}
+    implementation = registry.get("llm_providers", provider_id).implementation()
+    return {"models": implementation.models()}

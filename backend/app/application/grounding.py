@@ -32,8 +32,8 @@ def select_evidence(question: str, candidates: list[dict], max_passages: int = 3
     return selected
 
 
-def validate_answer(answer: str, passages: list[dict]) -> tuple[bool, str, set[int]]:
-    """Check cited claims too. Lexical checks reduce errors but cannot prove entailment."""
+def validate_answer(answer: str, passages: list[dict], require_citations: bool = True) -> tuple[bool, str, set[int]]:
+    """Check claim overlap and citation shape; lexical checks cannot prove entailment."""
     if re.search(r"\b(?:cannot find support|insufficient evidence|not enough information|don.t know)\b", answer, re.I):
         return False, 'insufficient_evidence', set()
     blocks = [block.strip() for block in re.split(r'\n\s*\n', answer) if block.strip()]
@@ -42,22 +42,29 @@ def validate_answer(answer: str, passages: list[dict]) -> tuple[bool, str, set[i
         return False, 'empty_answer', used
     for block in blocks:
         ids = {int(n) for n in re.findall(r'\[(\d+)\]', block)}
-        if not ids or not re.search(r'\[\d+\][.!?\s]*$', block):
+        if require_citations and (not ids or not re.search(r'\[\d+\][.!?\s]*$', block)):
             return False, 'missing_citations', set()
         if any(n < 1 or n > len(passages) for n in ids):
             return False, 'invalid_citation', set()
         text = re.sub(r'\[\d+\]', '', block)
-        for sentence in re.split(r'(?<=[.!?])\s+', text.strip()):
-            claim = terms(sentence)
-            if not claim:
-                continue
-            names = {w.lower().rstrip('s') for w in re.findall(r'\b[A-Z][a-z]{2,}\b', sentence)
-                     if w.lower() not in STOP and w.lower() not in {'however', 'also', 'following'}}
-            numbers = set(re.findall(r'\b\d+(?:[,.]\d+)*\b', sentence))
-            if not any(names <= terms(passages[n-1]['text'])
-                       and numbers <= set(re.findall(r'\b\d+(?:[,.]\d+)*\b', passages[n-1]['text']))
-                       and len(claim & terms(passages[n-1]['text'])) / len(claim) >= 0.55
-                       for n in ids):
-                return False, 'unsupported_claim', set()
+        claims = re.split(r'\n\s*(?=(?:[-*•]\s+|\d+[.)]\s+))', text.strip())
+        for claim_text in claims:
+            claim_text = re.sub(r'^\s*(?:[-*•]|\d+[.)])\s+', '', claim_text)
+            for sentence in re.split(r'(?<=[.!?])\s+', claim_text.strip()):
+                claim = terms(sentence)
+                if not claim:
+                    continue
+                names = {w.lower().rstrip('s') for w in re.findall(r'\b[A-Z][a-z]{2,}\b', sentence)
+                         if w.lower() not in STOP and w.lower() not in {'however', 'also', 'following'}}
+                numbers = set(re.findall(r'\b\d+(?:[,.]\d+)*\b', sentence))
+                candidates = ids or set(range(1, len(passages) + 1))
+                supported_by = {n for n in candidates
+                                if names <= terms(passages[n-1]['text'])
+                                and numbers <= set(re.findall(r'\b\d+(?:[,.]\d+)*\b', passages[n-1]['text']))
+                                and len(claim & terms(passages[n-1]['text'])) / len(claim) >= 0.55}
+                if not supported_by:
+                    return False, 'unsupported_claim', set()
+                if not ids:
+                    used.update(supported_by)
         used.update(ids)
     return True, 'validated', used

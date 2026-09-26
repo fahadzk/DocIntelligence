@@ -1,4 +1,4 @@
-import type { Passage, Answer, IndexState } from "./search";
+import type { Passage, IndexState } from "./search";
 
 export type PipelineTab = "document" | "search" | "ask";
 export interface PluginField {
@@ -55,10 +55,6 @@ export interface LabPassage extends Passage {
   segment_index: number;
   start_offset: number;
   end_offset: number;
-}
-export interface LabAnswer extends Answer {
-  context?: { document: string; label: string; chunk_id: string; text: string; characters: number; page_number: number | null }[];
-  background?: string | null;
 }
 export interface ChunkPreview { count: number; average_characters: number; samples: LabPassage[] }
 export type LabIndexState = IndexState;
