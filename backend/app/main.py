@@ -1,3 +1,17 @@
+import os
+import sys
+
+# Connect to VS Code debugger if the batch file requested it
+if os.getenv("DEBUGGER") == "true":
+    try:
+        import debugpy
+        debugpy.listen(("127.0.0.1", 5678))
+        print("📁 VS Code Debugger listening on port 5678. Ready to attach!", flush=True)
+    except ImportError:
+        print("⚠️ debugpy not found in virtual environment. Install via pip.", flush=True)
+    except Exception as e:
+        print(f"⚠️ Debugger initialization failed: {e}", flush=True)
+
 import logging
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -58,7 +72,8 @@ def get_search_service() -> SearchService:
     settings = get_settings()
     documents = get_document_service()
     service = SearchService(documents, SearchRepository(settings.database_path), settings.data_dir, settings.model_dir,
-                            operations=get_operational_logger())
+                            operations=get_operational_logger(), config_service=get_pipeline_config(),
+                            registry=get_plugin_registry())
     def schedule_index(project_id, document_id):
         threading.Thread(target=service.index_document, args=(project_id, document_id),
                          daemon=True, name=f"index-{document_id}").start()
@@ -82,7 +97,6 @@ def get_lab_search_service() -> LabSearchService:
     documents = get_document_service()
     config = get_pipeline_config()
     lab = LabSearchService(get_search_service(), config, get_plugin_registry(), get_settings().data_dir)
-    config.on_document_change = lab.schedule_project
     get_search_service().on_embeddings_ready = lab.rebuild_all
     get_search_service().on_answers_ready = lab.rebuild_all
     standard_ready = documents.on_ready

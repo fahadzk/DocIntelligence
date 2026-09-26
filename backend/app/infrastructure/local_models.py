@@ -1,4 +1,4 @@
-"""Optional, app-managed CPU models. No hosted inference calls."""
+﻿"""Optional, app-managed CPU models. No hosted inference calls."""
 from pathlib import Path
 import threading
 from typing import Protocol
@@ -56,10 +56,19 @@ class LocalLLM:
         self._generation_lock = threading.Lock()
         self.path = directory / LLM_FILENAME
         self._model = None
+        self._loaded_path: Path | None = None
+
+    def available_models(self) -> list[str]:
+        found = sorted(item.name for item in self.directory.glob("*.gguf")) if self.directory.exists() else []
+        return [LLM_FILENAME, *[item for item in found if item != LLM_FILENAME]]
+
+    def ready_for(self, filename: str) -> bool:
+        path = self.directory / filename
+        return path.is_file() and path.stat().st_size > 900_000_000
 
     @property
     def ready(self) -> bool:
-        return self.path.is_file() and self.path.stat().st_size > 900_000_000
+        return self.ready_for(LLM_FILENAME)
 
     def provision(self) -> None:
         from huggingface_hub import hf_hub_download
@@ -73,17 +82,23 @@ class LocalLLM:
         with self._generation_lock:
             return self._answer(system, prompt, options)
 
+    def answer_chunk(self, system: str, prompt: str, filename: str) -> str:
+        return self.answer(system, prompt, {"model": filename})
+
     def _answer(self, system: str, prompt: str, options: dict | None = None) -> str:
-        if not self.ready:
-            raise RuntimeError("The answer model has not been downloaded.")
-        if self._model is None:
+        filename = (options or {}).get("model", LLM_FILENAME)
+        model_path = self.directory / filename
+        if not self.ready_for(filename):
+            raise RuntimeError("The selected local model has not been downloaded.")
+        if self._model is None or self._loaded_path != model_path:
             import psutil
             if psutil.virtual_memory().available < DEFAULTS["ask"]["minimum_free_bytes"]:
                 raise InsufficientMemoryError("At least 2.5 GB of free memory is needed to load the local answer model. Close other applications and try again; Search remains available.")
             from llama_cpp import Llama
-            self._model = Llama(model_path=str(self.path), n_ctx=(options or {}).get("context_tokens", DEFAULTS["ask"]["context_tokens"]),
+            self._model = Llama(model_path=str(model_path), n_ctx=(options or {}).get("context_tokens", DEFAULTS["ask"]["context_tokens"]),
                                 n_threads=DEFAULTS["ask"]["threads"], n_gpu_layers=DEFAULTS["ask"]["gpu_layers"],
                                 chat_format=DEFAULTS["ask"]["chat_format"], verbose=False)
+            self._loaded_path = model_path
         self._model.reset()
         response = self._model.create_chat_completion(
             messages=[{"role": "system", "content": system},
@@ -142,3 +157,7 @@ class ChromaVectorStore:
     def delete(self, project_id: str, document_id: str) -> None:
         self.collection().delete(where={"$and": [{"project_id": project_id},
                                                    {"document_id": document_id}]})
+
+
+
+

@@ -1,4 +1,4 @@
-"""Current Standard values and the only place Pipeline Lab resolves overrides."""
+﻿"""Current Standard values and the only place Pipeline Lab resolves overrides."""
 from copy import deepcopy
 import hashlib
 import json
@@ -9,7 +9,7 @@ DEFAULTS = {
                      "overlap": 120, "preserve_segments": True, "preserve_headings": True,
                      "boundary_search_start": 550,
                      "sensitivity": 0.35, "min_chunk_size": 200, "max_chunk_size": 900,
-                     "chunk_by": "topic"},
+                     "chunk_by": "topic", "model": "qwen2.5-1.5b-instruct-q4_k_m.gguf"},
         "embedding": {"plugin": "fastembed_bge_small", "model": "BAAI/bge-small-en-v1.5"},
         "vector_store": {"plugin": "chroma", "distance": "l2"},
     },
@@ -53,3 +53,4 @@ def resolve(overrides: dict | None = None) -> dict:
 def document_version(config: dict) -> str:
     encoded = json.dumps(config["document"], sort_keys=True, separators=(",", ":"))
     return "lab-" + hashlib.sha256(encoded.encode()).hexdigest()[:16]
+

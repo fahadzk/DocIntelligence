@@ -1,4 +1,4 @@
-"""Recoverable indexing, hybrid retrieval, and citation-checked local answers."""
+﻿"""Recoverable indexing, hybrid retrieval, and citation-checked local answers."""
 import logging
 import re
 import sqlite3
@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from app.application.grounding import select_evidence, validate_answer
-from app.config.pipeline_defaults import DEFAULTS
+from app.config.pipeline_defaults import DEFAULTS, document_version
 from app.domain.documents import DocumentError
 from app.infrastructure.local_models import (ChromaVectorStore, LocalEmbeddings,
                                              LocalLLM, InsufficientMemoryError, EMBED_MODEL, LLM_REPOSITORY)
@@ -54,7 +54,8 @@ def split_segments(project_id: str, document_id: str, content_hash: str,
 class SearchService:
     def __init__(self, documents, repository: SearchRepository, data_dir: Path,
                  model_dir: Path | None = None,
-                 embeddings=None, vectors=None, llm=None, operations=None):
+                 embeddings=None, vectors=None, llm=None, operations=None,
+                 config_service=None, registry=None):
         self.documents = documents
         self.repository = repository
         self.operations = operations
@@ -62,6 +63,8 @@ class SearchService:
         self.embeddings = embeddings or LocalEmbeddings(models / "embeddings")
         self.vectors = vectors or ChromaVectorStore(data_dir / "vectors")
         self.llm = llm or LocalLLM(models / "answers")
+        self.config_service = config_service
+        self.registry = registry
         self.setup_state = {"embeddings": "ready" if self.embeddings.ready else "not_installed",
                             "answers": "ready" if self.llm.ready else "not_installed"}
         self.setup_error: dict[str, str | None] = {"embeddings": None, "answers": None}
@@ -75,6 +78,14 @@ class SearchService:
     def version(self) -> str:
         return CHUNK_VERSION + ("+bge-small-en-v1.5" if self.embeddings.ready else "+keyword")
 
+    def settings_for(self, project_id: UUID) -> dict:
+        return self.config_service.effective(project_id) if self.config_service else DEFAULTS
+
+    def version_for(self, project_id: UUID) -> str:
+        if not self.config_service:
+            return self.version
+        return document_version(self.settings_for(project_id)) + ("+bge-small-en-v1.5" if self.embeddings.ready else "+keyword")
+
     def model_status(self) -> dict:
         return {
             "embeddings": {"status": self.setup_state["embeddings"],
@@ -82,7 +93,8 @@ class SearchService:
                            "size_mb": 70, "source": "https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q"},
             "answers": {"status": self.setup_state["answers"],
                         "error": self.setup_error["answers"], "name": LLM_REPOSITORY,
-                        "size_mb": 1070, "source": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF"},
+                        "size_mb": 1070, "source": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+                        "models": [{"id": item, "name": item} for item in self.llm.available_models()]},
         }
 
     def provision(self, kind: str) -> None:
@@ -120,8 +132,9 @@ class SearchService:
                 WHERE d.status='ready'
             """).fetchall()
         for row in rows:
-            if row["status"] != "ready" or row["index_version"] != self.version or row["indexed_hash"] != row["content_hash"]:
-                self.index_document(UUID(row["project_id"]), UUID(row["id"]))
+            project_id = UUID(row["project_id"])
+            if row["status"] != "ready" or row["index_version"] != self.version_for(project_id) or row["indexed_hash"] != row["content_hash"]:
+                self.index_document(project_id, UUID(row["id"]))
 
     def rebuild_all(self) -> None:
         with self.repository.connect() as connection:
@@ -129,9 +142,35 @@ class SearchService:
         for row in rows:
             self.index_document(UUID(row["project_id"]), UUID(row["id"]), force=True)
 
+    def rebuild_project(self, project_id: UUID) -> None:
+        """Rebuild every readable document after an applied document-pipeline change."""
+        for document in self.documents.list(project_id):
+            if document.status == "ready":
+                self.index_document(project_id, document.id, force=True)
+
+    def reembed_document(self, project_id: UUID, document_id: UUID) -> None:
+        """Regenerate vectors while retaining the current chunks and keyword index."""
+        if not self.embeddings.ready:
+            raise DocumentError("MODEL_NOT_READY", "Set up the local embedding model first.", 409)
+        document = self.documents.get(project_id, document_id)
+        if document.status != "ready":
+            raise DocumentError("DOCUMENT_NOT_READY", "Only readable documents can be embedded.", 409)
+        passages = self.repository.passages_for_document(str(project_id), str(document_id))
+        if not passages:
+            self.index_document(project_id, document_id, force=True)
+            return
+        vectors = self.embeddings.embed([item["text"] for item in passages])
+        self.vectors.delete(str(project_id), str(document_id))
+        self.vectors.upsert([item["id"] for item in passages], [item["text"] for item in passages], vectors, str(project_id), str(document_id))
+
+    def chunks(self, project_id: UUID, document_id: UUID) -> list[dict]:
+        self.documents.get(project_id, document_id)
+        return self.repository.passages_for_document(str(project_id), str(document_id))
+
     def index_document(self, project_id: UUID, document_id: UUID, force: bool = False) -> None:
         started = perf_counter()
-        self._log(project_id, "index.started", "Started passage indexing", document_id=document_id, details={"index_version": self.version})
+        version = self.version_for(project_id)
+        self._log(project_id, "index.started", "Started passage indexing", document_id=document_id, details={"index_version": version})
         with self._lock:
             try:
                 document = self.documents.get(project_id, document_id)
@@ -140,18 +179,23 @@ class SearchService:
                 existing = next((item for item in self.repository.status(str(project_id))
                                  if item["document_id"] == str(document_id)), None)
                 if (not force and existing and existing["status"] == "ready"
-                        and existing["index_version"] == self.version
+                        and existing["index_version"] == version
                         and existing["indexed_hash"] == document.content_hash):
                     return
                 self.repository.mark(str(project_id), str(document_id), "indexing", "splitting",
-                                     self.version, document.content_hash)
+                                     version, document.content_hash)
                 segments = self.documents.content(project_id, document_id)["segments"]
-                passages = split_segments(str(project_id), str(document_id), document.content_hash,
-                                          segments, self.version)
-                self._log(project_id, "chunking.completed", "Split extracted content into passages", document_id=document_id, details={"strategy": "source-segment sliding window", "max_characters": 900, "overlap_characters": 120, "boundary": "last whitespace after 550 characters", "segments": len(segments), "passages": len(passages)}, duration_ms=round((perf_counter() - started) * 1000))
+                settings = self.settings_for(project_id)["document"]["chunking"]
+                if self.registry:
+                    chunker = self.registry.get("chunking", settings["plugin"]).implementation
+                    passages = chunker(str(project_id), str(document_id), document.content_hash, segments,
+                                       version, settings, embeddings=self.embeddings, llm=self.llm)
+                else:
+                    passages = split_segments(str(project_id), str(document_id), document.content_hash, segments, version)
+                self._log(project_id, "chunking.completed", "Split extracted content into passages", document_id=document_id, details={"strategy": settings["plugin"], "segments": len(segments), "passages": len(passages)}, duration_ms=round((perf_counter() - started) * 1000))
                 if self.embeddings.ready and passages:
                     self.repository.mark(str(project_id), str(document_id), "indexing", "embedding",
-                                         self.version, document.content_hash)
+                                         version, document.content_hash)
                     embedding_started = perf_counter()
                     self._log(project_id, "embedding.started", "Started local embedding generation", document_id=document_id, details={"provider": "FastEmbed", "model": EMBED_MODEL, "vector_store": "Chroma", "passages": len(passages)})
                     vectors = self.embeddings.embed([item["text"] for item in passages])
@@ -160,7 +204,7 @@ class SearchService:
                                         str(project_id), str(document_id))
                     self._log(project_id, "embedding.persisted", "Stored embeddings in Chroma", document_id=document_id, details={"vector_store": "Chroma", "passages": len(passages)}, duration_ms=round((perf_counter() - embedding_started) * 1000))
                 self.repository.replace(str(project_id), str(document_id), passages,
-                                        self.version, document.content_hash)
+                                        version, document.content_hash)
                 self._log(project_id, "index.completed", "Saved passages and keyword index in SQLite", document_id=document_id, details={"database": "SQLite FTS5", "passages": len(passages), "index_version": self.version}, duration_ms=round((perf_counter() - started) * 1000))
             except DocumentError as error:
                 if error.code in ("DOCUMENT_NOT_FOUND", "PROJECT_NOT_FOUND"):
@@ -178,7 +222,7 @@ class SearchService:
     def _mark_index_failure(self, project_id: UUID, document_id: UUID, content_hash: str) -> None:
         try:
             self.repository.mark(str(project_id), str(document_id), "failed", "indexing",
-                                 self.version, content_hash, "Indexing failed. Rebuild this document's index.")
+                                 self.version_for(project_id), content_hash, "Indexing failed. Rebuild this document's index.")
         except sqlite3.IntegrityError:
             logger.info("Index result discarded for removed document %s", document_id)
 
@@ -197,40 +241,64 @@ class SearchService:
     def search(self, project_id: UUID, query: str, document_id: UUID | None = None,
                limit: int = DEFAULTS["search"]["result_limit"]) -> list[dict]:
         self.documents.require_project(project_id)
+        options = self.settings_for(project_id)["search"]
+        limit = limit if limit != DEFAULTS["search"]["result_limit"] else options["result_limit"]
         started = perf_counter()
         self._log(project_id, "search.started", "Started project-scoped hybrid retrieval", details={"keyword_index": "SQLite FTS5", "semantic_enabled": self.embeddings.ready, "vector_store": "Chroma"})
         if not query.strip():
             return []
         try:
-            keyword = self.repository.keyword(str(project_id), query, DEFAULTS["search"]["keyword_candidates"])
+            keyword = self.repository.keyword(str(project_id), query, options["keyword_candidates"])
         except Exception:
             logger.exception("Keyword index query failed")
             raise DocumentError("INDEX_UNAVAILABLE", "Search index is unavailable. Rebuild the index.", 503)
+        use_keyword = options["retrieval"] in ("keyword", "hybrid")
+        use_semantic = options["retrieval"] in ("semantic", "hybrid")
+        if not use_keyword:
+            keyword = []
         semantic: list[str] = []
-        if self.embeddings.ready:
+        if use_semantic and self.embeddings.ready:
             try:
-                semantic = self.vectors.search(str(project_id), self.embeddings.embed([query])[0], DEFAULTS["search"]["semantic_candidates"])
+                semantic = self.vectors.search(str(project_id), self.embeddings.embed([query])[0], options["semantic_candidates"])
             except Exception:
                 logger.exception("Semantic search failed; keyword results remain available")
                 self.setup_state["embeddings"] = "failed"
                 self.setup_error["embeddings"] = "Semantic search is unavailable. Rebuild the index or retry model setup."
-        # Reciprocal-rank fusion keeps scores internal; UI shows match type only.
+        elif use_semantic and not use_keyword:
+            raise DocumentError("MODEL_NOT_READY", "Set up the local embedding model for semantic search.", 409)
         ranks: dict[str, float] = {}
         matches: dict[str, set[str]] = {}
         for source, ids in (("keyword", keyword), ("semantic", semantic)):
             for rank, passage_id in enumerate(ids):
-                ranks[passage_id] = ranks.get(passage_id, 0) + 1 / (DEFAULTS["search"]["rrf_constant"] + rank)
+                if options["fusion"] == "weighted":
+                    weight = options["keyword_weight"] if source == "keyword" else options["semantic_weight"]
+                    score = weight / (rank + 1)
+                else:
+                    score = 1 / (options["rrf_constant"] + rank)
+                ranks[passage_id] = ranks.get(passage_id, 0) + score
                 matches.setdefault(passage_id, set()).add(source)
         results = []
         for passage_id in sorted(ranks, key=ranks.get, reverse=True):
             passage = self.repository.get(str(project_id), passage_id)
             if passage and (document_id is None or passage["document_id"] == str(document_id)):
                 passage["match_type"] = "exact and related" if len(matches[passage_id]) == 2 else next(iter(matches[passage_id]))
+                passage["final_rank"] = len(results) + 1
                 results.append(passage)
-            if len(results) >= limit:
+        if options["reranker"] == "lexical":
+            terms = set(re.findall(r"\w+", query.lower()))
+            results.sort(key=lambda item: (-len(terms & set(re.findall(r"\w+", item["text"].lower()))), item["final_rank"]))
+        selected, counts = [], {}
+        for passage in results:
+            count = counts.get(passage["document_id"], 0)
+            cap = options["max_chunks_per_document"]
+            if cap is not None and count >= cap:
+                continue
+            counts[passage["document_id"]] = count + 1
+            selected.append(passage)
+            if len(selected) >= limit:
                 break
         self._log(project_id, "search.completed", "Completed hybrid retrieval and ranking", details={"keyword_candidates": len(keyword), "semantic_candidates": len(semantic), "results": len(results)}, duration_ms=round((perf_counter() - started) * 1000))
-        return results
+        return selected
 
     def evidence(self, project_id: UUID, passage_id: UUID) -> dict:
         self.documents.require_project(project_id)
@@ -241,8 +309,8 @@ class SearchService:
 
     def ask(self, project_id: UUID, question: str) -> dict:
         started = perf_counter()
-        lab = hasattr(self, "config_service")
-        options = self.config_service.effective(project_id)["ask"] if lab else DEFAULTS["ask"]
+        lab = self.config_service is not None
+        options = self.settings_for(project_id)["ask"]
         self._log(project_id, "ask.started", "Started grounded answer workflow",
                   details={"provider": options["provider"], "model": options["model"]})
         if options["provider"] == "llamacpp" and not self.llm.ready:
@@ -334,3 +402,5 @@ class SearchService:
                   duration_ms=round((perf_counter() - started) * 1000))
         return {"answer": "I couldn't produce a supported answer from these documents. Try a more specific question or review Search for relevant passages.",
                 "supported": False, "evidence": []}
+
+

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+﻿import { useState, type ReactNode } from "react";
 import { documentsApi } from "../services/api";
 import type { Passage } from "../types/search";
 import { Button } from "./Button";
@@ -23,7 +23,9 @@ export function EvidenceBlock({ projectId, passage, number, anchorPrefix = "evid
     <div className="evidence-meta"><Icon name="document" size={16} />{number && <span className="citation-number">[{number}]</span>}<strong>{passage.display_name}</strong><span className="source-location">{passage.label}</span>{match && <span className="match-type">{match}</span>}</div>
     <p className="evidence-excerpt">{passage.text}</p>
     {diagnostics}
-    <div className="evidence-actions"><Button variant="quiet" icon="open" onClick={openSource}>Open source{passage.page_number ? ` · page ${passage.page_number}` : ""}</Button></div>
+    <details className="citation-metadata"><summary>Citation and metadata</summary><dl><div><dt>Document</dt><dd>{passage.display_name}</dd></div><div><dt>Source</dt><dd>{passage.label}</dd></div>{passage.page_number && <div><dt>Page</dt><dd>{passage.page_number}</dd></div>}{passage.paragraph_number && <div><dt>Paragraph</dt><dd>{passage.paragraph_number}</dd></div>}{passage.chunk_index !== undefined && <div><dt>Chunk</dt><dd>{passage.chunk_index + 1}</dd></div>}{passage.start_offset !== undefined && <div><dt>Source offsets</dt><dd>{passage.start_offset}–{passage.end_offset}</dd></div>}{passage.index_version && <div><dt>Index version</dt><dd>{passage.index_version}</dd></div>}</dl></details>
+    <div className="evidence-actions"><Button variant="quiet" icon="open" onClick={openSource}>Open source{passage.page_number ? ` Â· page ${passage.page_number}` : ""}</Button></div>
     {error && <p className="inline-error" role="alert">{error}</p>}
   </article>;
 }
+

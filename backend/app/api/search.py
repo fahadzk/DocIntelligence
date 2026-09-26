@@ -1,4 +1,4 @@
-from uuid import UUID
+﻿from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -68,6 +68,7 @@ class ModelResponse(BaseModel):
     name: str
     size_mb: int
     source: str
+    models: list[dict] = []
 
 
 class ModelsResponse(BaseModel):
@@ -121,3 +122,4 @@ def models(search: SearchService = Depends(service)):
 def setup_model(kind: str, search: SearchService = Depends(service)):
     search.provision(kind)
     return search.model_status()[kind]
+

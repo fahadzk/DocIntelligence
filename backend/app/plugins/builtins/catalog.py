@@ -1,4 +1,4 @@
-"""Bundled strategies. Adding another module beside this one extends discovery."""
+﻿"""Bundled strategies. Adding another module beside this one extends discovery."""
 from app.plugins.registry import Plugin
 from app.plugins import strategies
 from app.infrastructure.local_models import LocalEmbeddings, LocalLLM, ChromaVectorStore
@@ -22,6 +22,7 @@ PLUGINS = [
         field("max_chunk_size", "Maximum characters", "number", min=100, max=4000)),
         {"requires_embeddings": True, "source_locations": True}, strategies.semantic),
     Plugin("llm", "LLM", "Suggest paragraph boundaries with the installed local model.", "chunking", (
+        field("model", "Chunking model", "model_select"),
         field("chunk_by", "Chunk by", "select", options=["topic", "section", "concept"]),
         field("max_chunk_size", "Maximum characters", "number", min=100, max=4000),
         field("preserve_headings", "Preserve headings", "boolean")),
@@ -59,9 +60,10 @@ PLUGINS = [
     Plugin("lexical", "Term overlap", "Reorder candidates by matching query terms.", "rerankers", (),
            {"score": "matching_query_terms"}, strategies.lexical_rerank),
     Plugin("llamacpp", "Local Qwen / llama.cpp", "App-managed offline answer model.", "llm_providers", (
-        field("model", "Model", "select", options=["qwen2.5-1.5b-instruct-q4_k_m.gguf"]),
+        field("model", "Model", "select", options=["qwen2.5-1.5b-instruct-q4_k_m.gguf","qwen2.5-0.5b-instruct-q4_k_m.gguf"]),
         field("temperature", "Temperature", "slider", min=0, max=1, step=0.05),
         field("max_output_tokens", "Maximum output tokens", "number", min=64, max=2048)),
         {"local": True, "model_discovery": False, "temperature": True,
          "streaming": False, "system_prompt": True}, LocalLLM),
 ]
+

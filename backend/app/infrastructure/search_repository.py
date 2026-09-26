@@ -1,4 +1,4 @@
-"""Project-scoped passage and FTS persistence."""
+﻿"""Project-scoped passage and FTS persistence."""
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +91,16 @@ class SearchRepository:
             """, (project_id, passage_id)).fetchone()
         return dict(row) if row else None
 
+    def passages_for_document(self, project_id: str, document_id: str) -> list[dict]:
+        with self.connect() as connection:
+            rows = connection.execute("""SELECT p.*, d.display_name, d.file_type FROM passages p
+                JOIN documents d ON d.id=p.document_id AND d.project_id=p.project_id
+                JOIN document_indexes i ON i.document_id=d.id
+                WHERE p.project_id=? AND p.document_id=? AND d.status='ready'
+                  AND i.status='ready' AND i.index_version=p.index_version AND i.content_hash=d.content_hash
+                ORDER BY p.segment_index, p.chunk_index""", (project_id, document_id)).fetchall()
+        return [dict(row) for row in rows]
+
     def keyword(self, project_id: str, query: str, limit: int = 30) -> list[str]:
         import re
         terms = re.findall(r"\w+", query, re.UNICODE)[:12]
@@ -119,3 +129,4 @@ class SearchRepository:
                     AND i.content_hash=d.content_hash AND i.index_version=p.index_version
             """, (project_id,)).fetchall()
         return {row[0] for row in rows}
+

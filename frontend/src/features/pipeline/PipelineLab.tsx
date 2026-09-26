@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/Button";
 import { EvidenceBlock } from "../../components/EvidenceBlock";
 import { ErrorState } from "../../components/ErrorState";
@@ -9,6 +9,8 @@ import type { DocumentItem } from "../../types/documents";
 import type { Project } from "../../types/projects";
 import type { Plugin, PluginField, PipelineSettings, PipelineState, PipelineTab, ChunkPreview, LabPassage, LabAnswer, LabIndexState } from "../../types/pipeline";
 import type { Models } from "../../types/search";
+
+function automaticSaveEnabled() { return false; }
 
 function difference(base: unknown, current: unknown): unknown {
   if (!base || !current || typeof base !== "object" || typeof current !== "object") return Object.is(base, current) ? undefined : current;
@@ -83,7 +85,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
   const latest = useRef<{ state?: PipelineState; effective?: PipelineSettings; dirty: boolean }>({ dirty: false });
   latest.current = { state, effective, dirty };
 
-  useEffect(() => () => {
+  useEffect(() => () => { if (true) return;
     const snapshot = latest.current;
     if (!snapshot.dirty || !snapshot.state || !snapshot.effective) return;
     void (async () => {
@@ -134,7 +136,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
   }, [active, project.id, state]);
 
   useEffect(() => {
-    if (!state || !effective || !dirty || saveStatus === "error" || saving.current) return;
+    if (!state || !effective || !automaticSaveEnabled()) return;
     const timer = window.setTimeout(() => {
       const currentRevision = revision.current;
       saving.current = true;
@@ -167,6 +169,21 @@ export function PipelineLab({ project, registry, registryError, active = true }:
     }, 650);
     return () => window.clearTimeout(timer);
   }, [project.id, state, effective, dirty, saveStatus, saveCycle]);
+
+  async function applySettings() {
+    if (!state || !effective) return;
+    const documentChanged = JSON.stringify(state.effective.document) !== JSON.stringify(effective.document);
+    setBusy(true); setError(undefined);
+    try {
+      const overrides = difference(state.defaults, effective) as Partial<PipelineSettings> | undefined;
+      const saved = await pipelineApi.save(project.id, overrides ?? {});
+      setState(saved); setEffective(saved.effective); setDirty(false); setSaveStatus("saved");
+      if (documentChanged) { await pipelineApi.ensureIndex(project.id); setNotice("Settings applied. Reindexing readable documents with the new document pipeline."); }
+      else setNotice("Settings applied. Search and Ask will use them immediately.");
+      setIndexes(await pipelineApi.indexStatus(project.id));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not apply pipeline settings."); setSaveStatus("error"); }
+    finally { setBusy(false); }
+  }
 
   function update(path: string[], value: unknown) {
     revision.current += 1;
@@ -239,14 +256,14 @@ export function PipelineLab({ project, registry, registryError, active = true }:
     ["Search", selectedRetrieval?.name, selectedFusion?.name, `${effective.search.semantic_candidates} semantic + ${effective.search.keyword_candidates} keyword`, `${effective.search.result_limit} results`],
     ["Ask", selectedProvider?.name, effective.ask.grounding === "sources_only" ? "Sources only" : "Sources + model knowledge", `${effective.ask.evidence_count} evidence passages`, effective.ask.require_citations ? "Citations on" : "Citations optional"]
   ];
-  return <section className="pipeline-lab"><div className="lab-heading"><div><p className="eyebrow">Advanced workspace</p><h2>Pipeline Lab</h2><p>Inspect and tune how this project becomes evidence and answers.</p></div><div className="lab-save-state" role="status" aria-live="polite"><span>{saveStatus === "saved" ? "All changes saved" : saveStatus === "saving" ? "Saving changes…" : saveStatus === "error" ? "Changes not saved" : "Changes pending…"}</span>{saveStatus === "error" && <Button onClick={() => { setError(undefined); setSaveStatus("pending"); }}>Retry save</Button>}</div></div>
+  return <section className="pipeline-lab"><div className="lab-heading"><div><p className="eyebrow">Advanced workspace</p><h2>Pipeline Lab</h2><p>Configure the document, search, and answer pipeline used throughout this project.</p></div><Button variant="primary" onClick={() => void applySettings()} disabled={!dirty || busy}>Save & Apply</Button><div className="lab-save-state" role="status" aria-live="polite"><span>{saveStatus === "saved" ? "All changes saved" : saveStatus === "saving" ? "Saving changes…" : saveStatus === "error" ? "Changes not saved" : "Changes pending…"}</span>{saveStatus === "error" && <Button onClick={() => { setError(undefined); setSaveStatus("pending"); }}>Retry save</Button>}</div></div>
     <div className="lab-summary" aria-label="Effective pipeline">{summary.map((items, stage) => <div className="lab-summary-stage" key={items[0]}><strong><Icon name={stage === 0 ? "document" : stage === 1 ? "search" : "ask"} size={17} />{items[0]}</strong><span className="lab-summary-main">{items[1]}</span>{items.slice(2).map((item, index) => <span key={index}>{item}</span>)}</div>)}</div>
-    {dirty && <p className="lab-unsaved">Settings save automatically. Experiments become available once saving finishes.</p>}
+    {dirty && <p className="lab-unsaved">Changes are drafts until you select Save & Apply. Document changes reindex readable documents; Search and Ask changes apply immediately.</p>}
     {notice && <p className="lab-notice" role="status">{notice}</p>}
     <nav className="workspace-tabs" aria-label="Pipeline Lab sections">{(["document", "search", "ask"] as const).map((item) => <button key={item} aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)}>{item.toUpperCase()}</button>)}</nav>
     {error && <ErrorState message={error} retry={() => setError(undefined)} />}
-    {tab === "document" && <div className="lab-section"><h3>Document pipeline</h3><p>Preview boundaries before replacing this Lab index. Standard stays on its current index.</p>
-      <div className="lab-control-grid"><div><label>Chunking strategy <span className="lab-default-badge">{effective.document.chunking.plugin === state.defaults.document.chunking.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.chunking.plugin} onChange={(event) => update(["document", "chunking", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "chunking").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedChunker?.description && <p className="field-help">{selectedChunker.description}</p>}<SchemaFields plugin={selectedChunker} values={effective.document.chunking} defaults={state.defaults.document.chunking} onChange={(key, value) => update(["document", "chunking", key], value)} /></div>
+    {tab === "document" && <div className="lab-section"><h3>Document pipeline</h3><p>These settings configure the shared document index used by Documents, Search, and Ask.</p>
+      <div className="lab-control-grid"><div><label>Chunking strategy <span className="lab-default-badge">{effective.document.chunking.plugin === state.defaults.document.chunking.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.chunking.plugin} onChange={(event) => update(["document", "chunking", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "chunking").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedChunker?.description && <p className="field-help">{selectedChunker.description}</p>}<SchemaFields plugin={selectedChunker} values={effective.document.chunking} defaults={state.defaults.document.chunking} models={models?.answers.models ?? []} onChange={(key, value) => update(["document", "chunking", key], value)} /></div>
         <div><label>Embedding <span className="lab-default-badge">{effective.document.embedding.plugin === state.defaults.document.embedding.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.embedding.plugin} onChange={(event) => update(["document", "embedding", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "embeddings").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedEmbedding?.description && <p className="field-help">{selectedEmbedding.description}</p>}<SchemaFields plugin={selectedEmbedding} values={effective.document.embedding} defaults={state.defaults.document.embedding} onChange={(key, value) => update(["document", "embedding", key], value)} />
         <label>Vector store <span className="lab-default-badge">{effective.document.vector_store.plugin === state.defaults.document.vector_store.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.vector_store.plugin} onChange={(event) => update(["document", "vector_store", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "vector_stores").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedStore?.description && <p className="field-help">{selectedStore.description}</p>}<SchemaFields plugin={selectedStore} values={effective.document.vector_store} defaults={state.defaults.document.vector_store} onChange={(key, value) => update(["document", "vector_store", key], value)} /></div></div>
       {models?.embeddings.status !== "ready" && <div className="lab-notice">Semantic chunking and retrieval need the local embedding model. {models?.embeddings.error && <span>{models.embeddings.error} </span>}<Button disabled={models?.embeddings.status === "downloading"} onClick={() => void searchApi.setup("embeddings").then(() => searchApi.models().then(setModels))}>{models?.embeddings.status === "downloading" ? "Downloading…" : "Set up model"}</Button></div>}
@@ -281,3 +298,9 @@ export function PipelineLab({ project, registry, registryError, active = true }:
     {busy && <LoadingState label="Working on this experiment…" />}
   </section>;
 }
+
+
+
+
+
+

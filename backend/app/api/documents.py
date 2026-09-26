@@ -1,4 +1,5 @@
-from datetime import datetime
+﻿from datetime import datetime
+import threading
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
@@ -7,7 +8,7 @@ from pydantic import BaseModel
 
 from app.application.documents import DocumentService
 from app.domain.documents import DocumentError
-from app.main import get_document_service
+from app.main import get_document_service, get_search_service
 
 router = APIRouter(prefix="/api/projects/{project_id}/documents", tags=["documents"])
 
@@ -82,6 +83,24 @@ def get_content(project_id: UUID, document_id: UUID, documents: DocumentService 
     return documents.content(project_id, document_id)
 
 
+@router.get("/{document_id}/chunks")
+def chunks(project_id: UUID, document_id: UUID):
+    return get_search_service().chunks(project_id, document_id)
+
+@router.post("/{document_id}/reindex")
+def reindex(project_id: UUID, document_id: UUID):
+    search = get_search_service()
+    search.documents.get(project_id, document_id)
+    threading.Thread(target=search.index_document, args=(project_id, document_id, True), daemon=True, name=f"reindex-{document_id}").start()
+    return {"status": "indexing"}
+
+@router.post("/{document_id}/embeddings")
+def reembed(project_id: UUID, document_id: UUID):
+    search = get_search_service()
+    search.documents.get(project_id, document_id)
+    threading.Thread(target=search.reembed_document, args=(project_id, document_id), daemon=True, name=f"reembed-{document_id}").start()
+    return {"status": "embedding"}
+
 @router.get("/{document_id}/original")
 def get_original(project_id: UUID, document_id: UUID, documents: DocumentService = Depends(service)):
     document = documents.get(project_id, document_id)
@@ -101,3 +120,4 @@ def retry_document(project_id: UUID, document_id: UUID, background: BackgroundTa
 def delete_document(project_id: UUID, document_id: UUID, documents: DocumentService = Depends(service)):
     documents.delete(project_id, document_id)
     return Response(status_code=204)
+

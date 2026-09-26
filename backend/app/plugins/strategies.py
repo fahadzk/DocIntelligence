@@ -1,4 +1,4 @@
-"""Built-in strategy implementations shared by Pipeline Lab and the existing engines."""
+﻿"""Built-in strategy implementations shared by Pipeline Lab and the existing engines."""
 import json
 import math
 import re
@@ -68,7 +68,7 @@ def semantic(project_id, document_id, content_hash, segments, version, settings,
 
 
 def llm(project_id, document_id, content_hash, segments, version, settings, llm=None, **_):
-    if llm is None or not llm.ready:
+    if llm is None or not llm.ready_for(settings["model"]):
         raise RuntimeError("Set up the local answer model before using LLM chunking.")
     result = []
     for segment in segments:
@@ -80,8 +80,12 @@ def llm(project_id, document_id, content_hash, segments, version, settings, llm=
         for base in range(0, len(paragraphs), 12):
             batch = paragraphs[base:base + 12]
             numbered = "\n".join(f"{index}: {item[2][:220]}" for index, item in enumerate(batch))
-            response = llm.answer("Return only a JSON array of paragraph indices where a new "
-                                  f"{settings['chunk_by']} begins. Indices must be 1 or greater.", numbered)
+            system = ("Return only a JSON array of paragraph indices where a new "
+                      f"{settings['chunk_by']} begins. Indices must be 1 or greater.")
+            if hasattr(llm, "answer_chunk"):
+                response = llm.answer_chunk(system, numbered, settings["model"])
+            else:
+                response = llm.answer(system, numbered)
             try:
                 indices = json.loads(response)
             except json.JSONDecodeError as error:
@@ -138,3 +142,4 @@ def lexical_rerank(query, candidates):
     terms = set(re.findall(r"\w+", query.lower()))
     return sorted(candidates, key=lambda item: (-len(terms & set(re.findall(r"\w+", item["text"].lower()))),
                                                  item["final_rank"]))
+

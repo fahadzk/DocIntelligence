@@ -1,4 +1,4 @@
-export interface Passage {
+﻿export interface Passage {
   id: string;
   project_id: string;
   document_id: string;
@@ -9,6 +9,11 @@ export interface Passage {
   paragraph_number: number | null;
   text: string;
   match_type?: string;
+  segment_index?: number;
+  chunk_index?: number;
+  start_offset?: number;
+  end_offset?: number;
+  index_version?: string;
 }
 export interface IndexState {
   document_id: string;
@@ -24,6 +29,7 @@ export interface ModelState {
   name: string;
   size_mb: number;
   source: string;
+  models?: { id: string; name: string }[];
 }
 export interface Models { embeddings: ModelState; answers: ModelState }
 export interface Answer {
@@ -31,3 +37,5 @@ export interface Answer {
   supported: boolean;
   evidence: { number: number; passage: Passage }[];
 }
+
+

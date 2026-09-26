@@ -1,4 +1,4 @@
-import type { Project } from "../types/projects";
+﻿import type { Project } from "../types/projects";
 import type { DocumentItem, ImportOutcome, Segment } from "../types/documents";
 import type { Answer, IndexState, ModelState, Models, Passage } from "../types/search";
 import type { Plugin, PipelineState, PipelineSettings, LabPassage, LabAnswer, ChunkPreview, LabIndexState } from "../types/pipeline";
@@ -20,6 +20,9 @@ export const documentsApi = {
   list: (projectId: string) => request<DocumentItem[]>(`/api/projects/${projectId}/documents`),
   get: (projectId: string, id: string) => request<DocumentItem>(`/api/projects/${projectId}/documents/${id}`),
   content: (projectId: string, id: string) => request<{ segments: Segment[] }>(`/api/projects/${projectId}/documents/${id}/content`),
+  chunks: (projectId: string, id: string) => request<(Segment & { id: string; chunk_index: number; start_offset: number; end_offset: number; index_version: string })[]>(`/api/projects/${projectId}/documents/${id}/chunks`),
+  reindex: (projectId: string, id: string) => request<{ status: string }>(`/api/projects/${projectId}/documents/${id}/reindex`, { method: "POST" }),
+  reembed: (projectId: string, id: string) => request<{ status: string }>(`/api/projects/${projectId}/documents/${id}/embeddings`, { method: "POST" }),
   retry: (projectId: string, id: string) => request<DocumentItem>(`/api/projects/${projectId}/documents/${id}/retry`, { method: "POST" }),
   remove: (projectId: string, id: string) => request<void>(`/api/projects/${projectId}/documents/${id}`, { method: "DELETE" }),
   import: async (projectId: string, files: FileList): Promise<ImportOutcome[]> => {
@@ -63,3 +66,4 @@ export const pipelineApi = {
   testProvider: (id: string) => request<{ connected: boolean; model_count: number }>(`/api/providers/${id}/test`, { method: "POST" }),
   models: (id: string) => request<{ models: { id: string; name: string }[] }>(`/api/providers/${id}/models`)
 };
+

@@ -1,5 +1,6 @@
 """Pipeline Lab contracts; Standard endpoints remain unchanged."""
 from uuid import UUID
+import threading
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, SecretStr
@@ -7,7 +8,7 @@ from pydantic import BaseModel, Field, SecretStr
 from app.application.lab_search import LabSearchService
 from app.application.pipeline_config import PipelineConfigService
 from app.domain.documents import DocumentError
-from app.main import get_lab_search_service, get_pipeline_config, get_plugin_registry
+from app.main import get_lab_search_service, get_pipeline_config, get_plugin_registry, get_search_service
 from app.plugins.cloud_providers import CloudProvider, HOSTS
 from app.plugins.registry import PluginRegistry
 
@@ -52,15 +53,17 @@ def put_pipeline(project_id: UUID, body: ConfigRequest,
 
 
 @router.post("/api/projects/{project_id}/pipeline/index/ensure")
-def ensure_index(project_id: UUID, lab: LabSearchService = Depends(get_lab_search_service)):
-    lab.documents.require_project(project_id)
-    lab.schedule_project(project_id)
+def ensure_index(project_id: UUID):
+    search = get_search_service()
+    search.documents.require_project(project_id)
+    threading.Thread(target=search.rebuild_project, args=(project_id,), daemon=True,
+                     name=f"reindex-{project_id}").start()
     return {"status": "indexing"}
 
 
 @router.get("/api/projects/{project_id}/pipeline/index/status")
-def lab_index_status(project_id: UUID, lab: LabSearchService = Depends(get_lab_search_service)):
-    return lab.statuses(project_id)
+def lab_index_status(project_id: UUID):
+    return get_search_service().statuses(project_id)
 
 
 @router.post("/api/projects/{project_id}/pipeline/preview")
