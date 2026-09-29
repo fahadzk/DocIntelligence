@@ -1,4 +1,4 @@
-﻿"""Recoverable indexing, hybrid retrieval, and citation-checked local answers."""
+"""Recoverable indexing, hybrid retrieval, and citation-checked local answers."""
 import logging
 import re
 import sqlite3
@@ -59,6 +59,9 @@ class SearchService:
         self.documents = documents
         self.repository = repository
         self.operations = operations
+        self.data_dir = data_dir
+        self.vector_profile = "standard"
+        self._vector_cache = {}
         models = model_dir or data_dir / "models"
         self.embeddings = embeddings or LocalEmbeddings(models / "embeddings")
         self.vectors = vectors or ChromaVectorStore(data_dir / "vectors")
@@ -80,6 +83,24 @@ class SearchService:
 
     def settings_for(self, project_id: UUID) -> dict:
         return self.config_service.effective(project_id) if self.config_service else DEFAULTS
+
+    def _chunk_llm(self, settings):
+        provider = settings.get("llm_provider", "llamacpp")
+        if settings["plugin"] != "llm" or provider == "llamacpp":
+            return self.llm
+        try:
+            return self.registry.get("llm_providers", provider).implementation()
+        except ValueError as error:
+            raise DocumentError("INVALID_PROVIDER", "Choose an available LLM provider for chunking.", 422) from error
+
+    def _vectors_for(self, project_id: UUID):
+        plugin_id = self.settings_for(project_id)["document"]["vector_store"]["plugin"]
+        if plugin_id == "chroma" or not self.registry:
+            return self.vectors
+        if plugin_id not in self._vector_cache:
+            plugin = self.registry.get("vector_stores", plugin_id)
+            self._vector_cache[plugin_id] = plugin.implementation(self.data_dir, profile=self.vector_profile)
+        return self._vector_cache[plugin_id]
 
     def version_for(self, project_id: UUID) -> str:
         if not self.config_service:
@@ -134,7 +155,9 @@ class SearchService:
             """).fetchall()
         for row in rows:
             project_id = UUID(row["project_id"])
-            if row["status"] != "ready" or row["index_version"] != self.version_for(project_id) or row["indexed_hash"] != row["content_hash"]:
+            # Recover missing/interrupted indexes and changed source content. A saved
+            # document-pipeline configuration is applied only by an explicit reindex.
+            if row["status"] != "ready" or row["indexed_hash"] != row["content_hash"]:
                 self.index_document(project_id, UUID(row["id"]))
 
     def rebuild_all(self) -> None:
@@ -161,8 +184,9 @@ class SearchService:
             self.index_document(project_id, document_id, force=True)
             return
         vectors = self.embeddings.embed([item["text"] for item in passages])
-        self.vectors.delete(str(project_id), str(document_id))
-        self.vectors.upsert([item["id"] for item in passages], [item["text"] for item in passages], vectors, str(project_id), str(document_id))
+        store = self._vectors_for(project_id)
+        store.delete(str(project_id), str(document_id))
+        store.upsert([item["id"] for item in passages], [item["text"] for item in passages], vectors, str(project_id), str(document_id))
 
     def chunks(self, project_id: UUID, document_id: UUID) -> list[dict]:
         self.documents.get(project_id, document_id)
@@ -190,7 +214,7 @@ class SearchService:
                 if self.registry:
                     chunker = self.registry.get("chunking", settings["plugin"]).implementation
                     passages = chunker(str(project_id), str(document_id), document.content_hash, segments,
-                                       version, settings, embeddings=self.embeddings, llm=self.llm)
+                                       version, settings, embeddings=self.embeddings, llm=self._chunk_llm(settings))
                 else:
                     passages = split_segments(str(project_id), str(document_id), document.content_hash, segments, version)
                 self._log(project_id, "chunking.completed", "Split extracted content into passages", document_id=document_id, details={"strategy": settings["plugin"], "segments": len(segments), "passages": len(passages)}, duration_ms=round((perf_counter() - started) * 1000))
@@ -200,7 +224,7 @@ class SearchService:
                     embedding_started = perf_counter()
                     self._log(project_id, "embedding.started", "Started local embedding generation", document_id=document_id, details={"provider": "FastEmbed", "model": EMBED_MODEL, "vector_store": "Chroma", "passages": len(passages)})
                     vectors = self.embeddings.embed([item["text"] for item in passages])
-                    self.vectors.upsert([item["id"] for item in passages],
+                    self._vectors_for(project_id).upsert([item["id"] for item in passages],
                                         [item["text"] for item in passages], vectors,
                                         str(project_id), str(document_id))
                     self._log(project_id, "embedding.persisted", "Stored embeddings in Chroma", document_id=document_id, details={"vector_store": "Chroma", "passages": len(passages)}, duration_ms=round((perf_counter() - embedding_started) * 1000))
@@ -231,7 +255,7 @@ class SearchService:
         self.repository.delete(str(project_id), str(document_id))
         if self.embeddings.ready:
             try:
-                self.vectors.delete(str(project_id), str(document_id))
+                self._vectors_for(project_id).delete(str(project_id), str(document_id))
             except Exception:
                 logger.exception("Vector cleanup failed; SQL validity checks prevent stale results")
 
@@ -260,7 +284,7 @@ class SearchService:
         semantic: list[str] = []
         if use_semantic and self.embeddings.ready:
             try:
-                semantic = self.vectors.search(str(project_id), self.embeddings.embed([query])[0], options["semantic_candidates"])
+                semantic = self._vectors_for(project_id).search(str(project_id), self.embeddings.embed([query])[0], options["semantic_candidates"])
             except Exception:
                 logger.exception("Semantic search failed; keyword results remain available")
                 self.setup_state["embeddings"] = "failed"

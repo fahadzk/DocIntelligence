@@ -10,7 +10,7 @@ def hosted(provider_id: str, name: str) -> Plugin:
                       {"key": "model", "label": "Model", "type": "model_select"},
                       {"key": "temperature", "label": "Temperature", "type": "slider", "min": 0, "max": 1, "step": 0.05},
                       {"key": "max_output_tokens", "label": "Maximum output tokens", "type": "number", "min": 64, "max": 4096}),
-                  {"local": False, "model_discovery": True, "temperature": True,
+                  {"local": False, "location": "cloud", "driver": provider_id, "model_discovery": True, "temperature": True,
                    "streaming": False, "system_prompt": True},
                   lambda _directory=None: CloudProvider(provider_id))
 
@@ -20,7 +20,7 @@ PLUGINS = [Plugin("ollama", "Ollama (local)", "Uses models installed in your loc
                       {"key": "model", "label": "Model", "type": "model_select"},
                       {"key": "temperature", "label": "Temperature", "type": "slider", "min": 0, "max": 1, "step": 0.05},
                       {"key": "max_output_tokens", "label": "Maximum output tokens", "type": "number", "min": 64, "max": 4096}),
-                  {"local": True, "model_discovery": True, "temperature": True,
+                  {"local": True, "location": "local", "driver": "ollama", "model_discovery": True, "temperature": True,
                    "streaming": False, "system_prompt": True},
                   lambda _directory=None: OllamaProvider())]
 PLUGINS += [hosted(provider_id, name) for provider_id, name in

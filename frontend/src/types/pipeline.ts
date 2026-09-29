@@ -1,6 +1,6 @@
 import type { Passage, IndexState } from "./search";
 
-export type PipelineTab = "document" | "search" | "ask";
+export type PipelineTab = "document" | "search" | "ask" | "plugins";
 export interface PluginField {
   key: string;
   label: string;
@@ -10,6 +10,18 @@ export interface PluginField {
   max?: number;
   step?: number;
   readonly?: boolean;
+  required?: boolean;
+  placeholder?: string;
+  default?: string | number | boolean;
+}
+export interface PluginDriver {
+  id: string; name: string; category: string; category_name: string;
+  locations: string[]; description: string; schema: PluginField[];
+}
+export interface PluginInstance {
+  id: string; name: string; category: string; driver: string; location: string;
+  enabled: boolean; settings: Record<string, string | number | boolean>; active?: boolean;
+  restart_required?: boolean;
 }
 export interface Plugin {
   id: string;

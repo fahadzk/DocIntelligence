@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../components/Button";
 import { EvidenceBlock } from "../../components/EvidenceBlock";
 import { ErrorState } from "../../components/ErrorState";
@@ -9,8 +9,7 @@ import type { DocumentItem } from "../../types/documents";
 import type { Project } from "../../types/projects";
 import type { Plugin, PluginField, PipelineSettings, PipelineState, PipelineTab, ChunkPreview, LabPassage, LabIndexState } from "../../types/pipeline";
 import type { Models } from "../../types/search";
-
-function automaticSaveEnabled() { return false; }
+import { PluginManager } from "./PluginManager";
 
 function difference(base: unknown, current: unknown): unknown {
   if (!base || !current || typeof base !== "object" || typeof current !== "object") return Object.is(base, current) ? undefined : current;
@@ -26,6 +25,14 @@ function pluginFor(registry: Plugin[], category: string, id: string): Plugin | u
   return registry.find((item) => item.category === category && item.id === id);
 }
 
+function ProviderOptions({ registry }: { registry: Plugin[] }) {
+  const providers = registry.filter((item) => item.category === "llm_providers");
+  return <>{(["local", "network", "cloud"] as const).map((location) => {
+    const entries = providers.filter((item) => (item.capabilities.location ?? (item.capabilities.local ? "local" : "cloud")) === location);
+    return entries.length ? <optgroup key={location} label={location[0].toUpperCase() + location.slice(1)}>{entries.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup> : null;
+  })}</>;
+}
+
 function SchemaFields({ plugin, values, defaults, onChange, models = [] }: {
   plugin?: Plugin; values: Record<string, unknown>; onChange: (key: string, value: unknown) => void;
   defaults?: Record<string, unknown>; models?: { id: string; name: string }[];
@@ -37,7 +44,7 @@ function SchemaFields({ plugin, values, defaults, onChange, models = [] }: {
     const changed = defaults && !Object.is(value, defaults[field.key]);
     if (field.type === "boolean") return <label className="lab-toggle" key={id} htmlFor={id}><input id={id} type="checkbox" checked={Boolean(value)} disabled={field.readonly} onChange={(event) => onChange(field.key, event.target.checked)} />{field.label}{changed && <span className="setting-state">Custom</span>}</label>;
     if (field.type === "select" || field.type === "model_select") {
-      const options = field.type === "model_select" ? models : (field.options ?? []).map((item) => ({ id: item, name: item.replaceAll("_", " ") }));
+      const options = field.type === "model_select" ? models : (field.options ?? []).map((item) => ({ id: item, name: item === "llamacpp" ? "Local Qwen / llama.cpp" : item === "ollama" ? "Ollama (local)" : item.replaceAll("_", " ") }));
       return <label key={id} htmlFor={id}><span className="field-label">{field.label}{changed && <span className="setting-state">Custom</span>}</span><select id={id} className="input" value={String(value ?? "")} onChange={(event) => onChange(field.key, event.target.value)}><option value="" disabled>Choose an option</option>{options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>;
     }
     if (field.type === "slider" || (field.type === "number" && ["chunk_size", "overlap"].includes(field.key) && field.min !== undefined && field.max !== undefined)) return <div className="lab-slider-field" key={id}><label htmlFor={id}><span className="field-label">{field.label}{changed && <span className="setting-state">Custom</span>}</span></label><div className="lab-slider-row"><input id={id} type="range" min={field.min} max={field.max} step={field.step ?? (field.type === "slider" ? 0.05 : 1)} value={Number(value ?? field.min ?? 0)} onChange={(event) => onChange(field.key, Number(event.target.value))} /><input className="input" type="number" aria-label={`${field.label} precise value`} min={field.min} max={field.max} step={field.step ?? (field.type === "slider" ? 0.05 : 1)} value={value === null || value === undefined ? "" : String(value)} onChange={(event) => onChange(field.key, event.target.value === "" ? null : Number(event.target.value))} /></div><small>{field.min}–{field.max}</small></div>;
@@ -63,6 +70,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
   const [indexes, setIndexes] = useState<LabIndexState[]>([]);
   const [models, setModels] = useState<Models>();
   const [providerModels, setProviderModels] = useState<{ id: string; name: string }[]>([]);
+  const [chunkModels, setChunkModels] = useState<{ id: string; name: string }[]>([]);
   const [providers, setProviders] = useState<{ id: string; configured: boolean }[]>([]);
   const [credentialProvider, setCredentialProvider] = useState("");
   const [credential, setCredential] = useState("");
@@ -75,23 +83,6 @@ export function PipelineLab({ project, registry, registryError, active = true }:
   const [notice, setNotice] = useState<string>();
   const [dirty, setDirty] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"saved" | "pending" | "saving" | "error">("saved");
-  const [saveCycle, setSaveCycle] = useState(0);
-  const revision = useRef(0);
-  const saving = useRef(false);
-  const outstanding = useRef<Promise<PipelineState> | null>(null);
-  const latest = useRef<{ state?: PipelineState; effective?: PipelineSettings; dirty: boolean }>({ dirty: false });
-  latest.current = { state, effective, dirty };
-
-  useEffect(() => () => { if (true) return;
-    const snapshot = latest.current;
-    if (!snapshot.dirty || !snapshot.state || !snapshot.effective) return;
-    void (async () => {
-      try { await outstanding.current; } catch { /* Retry the latest settings below. */ }
-      const overrides = difference(snapshot.state!.defaults, snapshot.effective!) as Partial<PipelineSettings> | undefined;
-      await pipelineApi.save(project.id, overrides ?? {}, true);
-    })().catch(() => undefined);
-  }, [project.id]);
-
   useEffect(() => {
     let live = true;
     setState(undefined); setError(undefined);
@@ -101,18 +92,27 @@ export function PipelineLab({ project, registry, registryError, active = true }:
         setState(loaded); setEffective(loaded.effective); setDocuments(docs); setIndexes(status); setModels(localModels); setProviders(providerState);
         setSelectedDocument(docs.find((item) => item.status === "ready")?.id ?? "");
         setCredentialProvider(providerState[0]?.id ?? "");
-        void pipelineApi.ensureIndex(project.id);
       }).catch((cause) => { if (live) setError(cause instanceof Error ? cause.message : "Pipeline Lab could not load."); });
     return () => { live = false; };
   }, [project.id]);
 
   useEffect(() => {
-    if (!effective || (effective.ask.provider !== "ollama" && !["openai", "anthropic", "google"].includes(effective.ask.provider))) return;
+    const selected = effective && pluginFor(registry, "llm_providers", effective.ask.provider);
+    if (!effective || effective.ask.provider === "llamacpp" || !selected?.capabilities.model_discovery) return;
     let live = true;
     void pipelineApi.models(effective.ask.provider).then((result) => { if (live) setProviderModels(result.models); }).catch(() => { if (live) setProviderModels([]); });
     return () => { live = false; };
-  }, [effective?.ask.provider]);
+  }, [effective?.ask.provider, registry]);
 
+  useEffect(() => {
+    const provider = effective?.document.chunking.llm_provider;
+    const providerId = String(provider ?? "");
+    const selected = pluginFor(registry, "llm_providers", providerId);
+    if (!effective || effective.document.chunking.plugin !== "llm" || provider === "llamacpp" || !selected?.capabilities.model_discovery) { setChunkModels([]); return; }
+    let live = true;
+    void pipelineApi.models(providerId).then((result) => { if (live) setChunkModels(result.models); }).catch(() => { if (live) setChunkModels([]); });
+    return () => { live = false; };
+  }, [effective?.document.chunking.plugin, effective?.document.chunking.llm_provider, registry]);
   useEffect(() => {
     if (!effective || !providerModels.length) return;
     setProviderModels([]);
@@ -139,58 +139,22 @@ export function PipelineLab({ project, registry, registryError, active = true }:
       .catch(() => undefined);
   }, [active, project.id, state]);
 
-  useEffect(() => {
-    if (!state || !effective || !automaticSaveEnabled()) return;
-    const timer = window.setTimeout(() => {
-      const currentRevision = revision.current;
-      saving.current = true;
-      setSaveStatus("saving");
-      const overrides = difference(state.defaults, effective) as Partial<PipelineSettings> | undefined;
-      const request = pipelineApi.save(project.id, overrides ?? {});
-      outstanding.current = request;
-      void request.then((saved) => {
-        setState(saved);
-        if (revision.current === currentRevision) {
-          setEffective(saved.effective);
-          setDirty(false);
-          setSaveStatus("saved");
-        } else {
-          setSaveStatus("pending");
-        }
-        void pipelineApi.indexStatus(project.id).then(setIndexes).catch(() => undefined);
-      }).catch((cause) => {
-        if (revision.current !== currentRevision) {
-          setSaveStatus("pending");
-        } else {
-          setError(cause instanceof Error ? cause.message : "Could not save pipeline settings.");
-          setSaveStatus("error");
-        }
-      }).finally(() => {
-        outstanding.current = null;
-        saving.current = false;
-        setSaveCycle((cycle) => cycle + 1);
-      });
-    }, 650);
-    return () => window.clearTimeout(timer);
-  }, [project.id, state, effective, dirty, saveStatus, saveCycle]);
-
-  async function applySettings() {
+  async function saveSettings() {
     if (!state || !effective) return;
     const documentChanged = JSON.stringify(state.effective.document) !== JSON.stringify(effective.document);
-    setBusy(true); setError(undefined);
+    setBusy(true); setSaveStatus("saving"); setError(undefined);
     try {
       const overrides = difference(state.defaults, effective) as Partial<PipelineSettings> | undefined;
       const saved = await pipelineApi.save(project.id, overrides ?? {});
       setState(saved); setEffective(saved.effective); setDirty(false); setSaveStatus("saved");
-      if (documentChanged) { await pipelineApi.ensureIndex(project.id); setNotice("Settings applied. Reindexing readable documents with the new document pipeline."); }
-      else setNotice("Settings applied. Search and Ask will use them immediately.");
+      if (documentChanged) setNotice("Settings saved. Document changes will be used the next time you re-chunk and re-index a document.");
+      else setNotice("Settings saved. Search and Ask changes are active.");
       setIndexes(await pipelineApi.indexStatus(project.id));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not apply pipeline settings."); setSaveStatus("error"); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save pipeline settings."); setSaveStatus("error"); }
     finally { setBusy(false); }
   }
 
   function update(path: string[], value: unknown) {
-    revision.current += 1;
     setEffective((previous) => {
       if (!previous) return previous;
       const next = JSON.parse(JSON.stringify(previous)) as PipelineSettings;
@@ -247,25 +211,27 @@ export function PipelineLab({ project, registry, registryError, active = true }:
   const selectedFusion = pluginFor(registry, "fusion", effective.search.fusion);
   const selectedReranker = pluginFor(registry, "rerankers", effective.search.reranker);
   const selectedProvider = pluginFor(registry, "llm_providers", effective.ask.provider);
-  const cloud = selectedProvider?.capabilities.local === false;
-  const providerUsesRemoteModelList = cloud || effective.ask.provider === "ollama";
+  const selectedChunkProvider = pluginFor(registry, "llm_providers", String(effective.document.chunking.llm_provider ?? "llamacpp"));
+  const cloud = selectedProvider?.capabilities.location === "cloud";
+  const providerUsesRemoteModelList = effective.ask.provider !== "llamacpp" && selectedProvider?.capabilities.model_discovery === true;
   const summary = [
     ["Document", selectedChunker?.name, `${effective.document.chunking.chunk_size} / ${effective.document.chunking.overlap}`, selectedEmbedding?.name, selectedStore?.name],
     ["Search", selectedRetrieval?.name, selectedFusion?.name, `${effective.search.semantic_candidates} semantic + ${effective.search.keyword_candidates} keyword`, `${effective.search.result_limit} results`],
     ["Ask", selectedProvider?.name, effective.ask.grounding === "sources_only" ? "Sources only" : "Sources + model knowledge", `${effective.ask.evidence_count} evidence passages`, effective.ask.require_citations ? "Citations on" : "Citations optional"]
   ];
-  return <section className="pipeline-lab"><div className="lab-heading"><div><p className="eyebrow">Advanced workspace</p><h2>Pipeline Lab</h2><p>Configure the document, search, and answer pipeline used throughout this project.</p></div><Button variant="primary" onClick={() => void applySettings()} disabled={!dirty || busy}>Save & Apply</Button><div className="lab-save-state" role="status" aria-live="polite"><span>{saveStatus === "saved" ? "All changes saved" : saveStatus === "saving" ? "Saving changes…" : saveStatus === "error" ? "Changes not saved" : "Changes pending…"}</span>{saveStatus === "error" && <Button onClick={() => { setError(undefined); setSaveStatus("pending"); }}>Retry save</Button>}</div></div>
+  return <section className="pipeline-lab"><div className="lab-heading"><div><p className="eyebrow">Advanced workspace</p><h2>Pipeline Lab</h2><p>Configure the document, search, and answer pipeline used throughout this project.</p></div><Button variant="primary" onClick={() => void saveSettings()} disabled={!dirty || busy}>Save</Button><div className="lab-save-state" role="status" aria-live="polite"><span>{saveStatus === "saved" ? "All changes saved" : saveStatus === "saving" ? "Saving changes…" : saveStatus === "error" ? "Changes not saved" : "Changes pending…"}</span>{saveStatus === "error" && <Button onClick={() => { setError(undefined); setSaveStatus("pending"); }}>Retry save</Button>}</div></div>
     <div className="lab-summary" aria-label="Effective pipeline">{summary.map((items, stage) => <div className="lab-summary-stage" key={items[0]}><strong><Icon name={stage === 0 ? "document" : stage === 1 ? "search" : "ask"} size={17} />{items[0]}</strong><span className="lab-summary-main">{items[1]}</span>{items.slice(2).map((item, index) => <span key={index}>{item}</span>)}</div>)}</div>
-    {dirty && <p className="lab-unsaved">Changes are drafts until you select Save & Apply. Document changes reindex readable documents; Search and Ask changes apply immediately.</p>}
+    {dirty && <p className="lab-unsaved">Changes are drafts until you select Save. Search and Ask changes apply after saving.</p>}
     {notice && <p className="lab-notice" role="status">{notice}</p>}
-    <nav className="workspace-tabs" aria-label="Pipeline Lab sections">{(["document", "search", "ask"] as const).map((item) => <button key={item} aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)}>{item.toUpperCase()}</button>)}</nav>
+    <nav className="workspace-tabs" aria-label="Pipeline Lab sections">{(["document", "search", "ask", "plugins"] as const).map((item) => <button key={item} aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)}>{item.toUpperCase()}</button>)}</nav>
     {error && <ErrorState message={error} retry={() => setError(undefined)} />}
-    {tab === "document" && <div className="lab-section"><h3>Document pipeline</h3><p>These settings configure the shared document index used by Documents, Search, and Ask.</p>
-      <div className="lab-control-grid"><div><label>Chunking strategy <span className="lab-default-badge">{effective.document.chunking.plugin === state.defaults.document.chunking.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.chunking.plugin} onChange={(event) => update(["document", "chunking", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "chunking").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedChunker?.description && <p className="field-help">{selectedChunker.description}</p>}<SchemaFields plugin={selectedChunker} values={effective.document.chunking} defaults={state.defaults.document.chunking} models={models?.answers.models ?? []} onChange={(key, value) => update(["document", "chunking", key], value)} /></div>
+    {tab === "plugins" && <PluginManager />}
+    {tab === "document" && <div className="lab-section"><h3>Document pipeline</h3><p>These settings configure the shared document index used by Documents, Search, and Ask.</p><div className="lab-notice">Saved Document changes take effect when you select Re-chunk &amp; re-index for a document in Documents.</div>
+      <div className="lab-control-grid"><div><label>Chunking strategy <span className="lab-default-badge">{effective.document.chunking.plugin === state.defaults.document.chunking.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.chunking.plugin} onChange={(event) => update(["document", "chunking", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "chunking").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedChunker?.description && <p className="field-help">{selectedChunker.description}</p>}{effective.document.chunking.plugin === "llm" && <><label>Provider<select className="input" value={String(effective.document.chunking.llm_provider ?? "llamacpp")} onChange={(event) => { update(["document", "chunking", "llm_provider"], event.target.value); update(["document", "chunking", "llm_model"], event.target.value === "llamacpp" ? (models?.answers.models[0]?.id ?? "") : ""); }}><ProviderOptions registry={registry} /></select></label><label>Model<select className="input" value={String(effective.document.chunking.llm_model ?? "")} onChange={(event) => update(["document", "chunking", "llm_model"], event.target.value)}><option value="" disabled>Choose a model</option>{(effective.document.chunking.llm_provider === "llamacpp" ? (models?.answers.models ?? []) : chunkModels).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{effective.document.chunking.llm_provider !== "llamacpp" && selectedChunkProvider?.capabilities.model_discovery === true && <Button onClick={() => void pipelineApi.models(String(effective.document.chunking.llm_provider)).then((result) => setChunkModels(result.models)).catch((cause) => setError(cause instanceof Error ? cause.message : "Could not fetch provider models."))} disabled={busy}>Refresh Models</Button>}</>}<SchemaFields plugin={selectedChunker} values={effective.document.chunking} defaults={state.defaults.document.chunking} onChange={(key, value) => update(["document", "chunking", key], value)} /></div>
         <div><label>Embedding <span className="lab-default-badge">{effective.document.embedding.plugin === state.defaults.document.embedding.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.embedding.plugin} onChange={(event) => update(["document", "embedding", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "embeddings").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedEmbedding?.description && <p className="field-help">{selectedEmbedding.description}</p>}<SchemaFields plugin={selectedEmbedding} values={effective.document.embedding} defaults={state.defaults.document.embedding} onChange={(key, value) => update(["document", "embedding", key], value)} />
         <label>Vector store <span className="lab-default-badge">{effective.document.vector_store.plugin === state.defaults.document.vector_store.plugin ? "Default" : "Custom"}</span><select className="input" value={effective.document.vector_store.plugin} onChange={(event) => update(["document", "vector_store", "plugin"], event.target.value)}>{registry.filter((item) => item.category === "vector_stores").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedStore?.description && <p className="field-help">{selectedStore.description}</p>}<SchemaFields plugin={selectedStore} values={effective.document.vector_store} defaults={state.defaults.document.vector_store} onChange={(key, value) => update(["document", "vector_store", key], value)} /></div></div>
       {models?.embeddings.status !== "ready" && <div className="lab-notice">Semantic chunking and retrieval need the local embedding model. {models?.embeddings.error && <span>{models.embeddings.error} </span>}<Button disabled={models?.embeddings.status === "downloading"} onClick={() => void searchApi.setup("embeddings").then(() => searchApi.models().then(setModels))}>{models?.embeddings.status === "downloading" ? "Downloading…" : "Set up model"}</Button></div>}
-      {effective.document.chunking.plugin === "llm" && models?.answers.status !== "ready" && <div className="lab-notice">LLM chunking needs the local answer model. {models?.answers.error && <span>{models.answers.error} </span>}<Button disabled={models?.answers.status === "downloading"} onClick={() => void searchApi.setup("answers").then(() => searchApi.models().then(setModels))}>{models?.answers.status === "downloading" ? "Downloading…" : "Set up model"}</Button></div>}
+      {effective.document.chunking.plugin === "llm" && effective.document.chunking.llm_provider === "llamacpp" && models?.answers.status !== "ready" && <div className="lab-notice">LLM chunking needs the local answer model. Select Ollama to use a model served by Ollama. {models?.answers.error && <span>{models.answers.error} </span>}<Button disabled={models?.answers.status === "downloading"} onClick={() => void searchApi.setup("answers").then(() => searchApi.models().then(setModels))}>{models?.answers.status === "downloading" ? "Downloading…" : "Set up model"}</Button></div>}
       <div className="lab-run-row"><label>Preview document<select className="input" value={selectedDocument} onChange={(event) => setSelectedDocument(event.target.value)}><option value="">Choose a readable document</option>{documents.filter((item) => item.status === "ready").map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label><Button onClick={() => void runPreview()} disabled={!selectedDocument || busy || dirty}>Preview Chunks</Button></div>
       {preview && <div className="lab-output"><h4>{preview.count} {preview.count === 1 ? "chunk" : "chunks"} · {preview.average_characters} characters on average</h4>{preview.samples.map((item) => <div key={item.id} className="lab-chunk"><strong>{item.label} · characters {item.start_offset}–{item.end_offset}</strong><p>{item.text}</p></div>)}</div>}
       <div className="lab-index"><h4>Lab index</h4>{indexes.filter((item) => item.document_status === "ready").map((item) => <p key={item.document_id}>{item.display_name}: {item.status ?? "pending"}{item.error_message ? ` · ${item.error_message}` : ""}</p>)}{indexes.some((item) => item.status === "failed") && <Button onClick={() => void pipelineApi.ensureIndex(project.id).then(() => pipelineApi.indexStatus(project.id)).then(setIndexes).catch((cause) => setError(String(cause)))}>Retry Lab index</Button>}</div>
@@ -277,7 +243,7 @@ export function PipelineLab({ project, registry, registryError, active = true }:
       {results && <div className="lab-output"><h4>{results.length ? `${results.length} ranked passages` : "No matching passages"}</h4>{results.map((item) => <PassageCard key={item.id} item={item} projectId={project.id} inspector />)}</div>}
     </div>}
     {tab === "ask" && <div className="lab-section"><h3>Answer settings</h3><div className="lab-retrieval-summary"><strong>Retrieval</strong><span>{selectedRetrieval?.name} · {selectedFusion?.name} · {effective.search.semantic_candidates} semantic + {effective.search.keyword_candidates} keyword · {effective.search.result_limit} results · Reranker {selectedReranker?.name}</span><Button variant="quiet" onClick={() => setTab("search")}>Edit Search Settings</Button></div>
-      <div className="lab-control-grid"><div><label>Provider<select className="input" value={effective.ask.provider} onChange={(event) => { update(["ask", "provider"], event.target.value); update(["ask", "model"], event.target.value === "llamacpp" ? state.defaults.ask.model : ""); }}><optgroup label="Local">{registry.filter((item) => item.category === "llm_providers" && item.capabilities.local === true).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup><optgroup label="Cloud">{registry.filter((item) => item.category === "llm_providers" && item.capabilities.local === false).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</optgroup></select></label>
+      <div className="lab-control-grid"><div><label>Provider<select className="input" value={effective.ask.provider} onChange={(event) => { update(["ask", "provider"], event.target.value); update(["ask", "model"], event.target.value === "llamacpp" ? state.defaults.ask.model : ""); }}><ProviderOptions registry={registry} /></select></label>
         {cloud && <div className="lab-notice">This provider receives the selected passages and your question. Your API key stays in the operating system credential store. <Button onClick={() => setManageProviders((current) => !current)}>Manage Providers</Button></div>}
         {effective.ask.provider === "llamacpp" && models?.answers.status !== "ready" && <div className="lab-notice">The local answer model is not ready. Search remains available. {models?.answers.error && <span>{models.answers.error} </span>}<Button disabled={models?.answers.status === "downloading"} onClick={() => void searchApi.setup("answers").then(() => searchApi.models().then(setModels))}>{models?.answers.status === "downloading" ? "Downloading…" : "Set up local model"}</Button></div>}
         {providerUsesRemoteModelList && <Button onClick={() => void refreshModels(effective.ask.provider)} disabled={busy}>Refresh Models</Button>}

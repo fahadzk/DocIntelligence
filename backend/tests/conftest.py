@@ -9,7 +9,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DOCUMENT_INTELLIGENCE_DATA_DIR", str(tmp_path))
     from app.config.settings import get_settings
     from app.main import (get_operational_logger, get_project_service, get_document_service,
-                          get_search_service, get_lab_search_service, get_pipeline_config, get_plugin_registry)
+                          get_search_service, get_lab_search_service, get_pipeline_config, get_plugin_registry,
+                          get_plugin_instance_store)
     get_settings.cache_clear()
     get_operational_logger.cache_clear()
     get_project_service.cache_clear()
@@ -18,6 +19,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     get_lab_search_service.cache_clear()
     get_pipeline_config.cache_clear()
     get_plugin_registry.cache_clear()
+    get_plugin_instance_store.cache_clear()
     from app.main import app
     with TestClient(app) as test_client:
         yield test_client
@@ -27,5 +29,6 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     get_lab_search_service.cache_clear()
     get_pipeline_config.cache_clear()
     get_plugin_registry.cache_clear()
+    get_plugin_instance_store.cache_clear()
     get_operational_logger.cache_clear()
     get_settings.cache_clear()

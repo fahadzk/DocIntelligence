@@ -1,8 +1,9 @@
-﻿"""Optional, app-managed CPU models. No hosted inference calls."""
+"""Optional, app-managed CPU models. No hosted inference calls."""
 from pathlib import Path
 import threading
 from typing import Protocol
 from app.config.pipeline_defaults import DEFAULTS
+from app.plugins.chunking_output import chunk_boundary_schema
 
 
 EMBED_MODEL = DEFAULTS["document"]["embedding"]["model"]
@@ -88,8 +89,11 @@ class LocalLLM:
         with self._generation_lock:
             return self._answer(system, prompt, options)
 
-    def answer_chunk(self, system: str, prompt: str, filename: str) -> str:
-        return self.answer(system, prompt, {"model": filename})
+    def answer_chunk(self, system: str, prompt: str, filename: str, *, paragraph_count: int = 12) -> str:
+        return self.answer(system, prompt, {
+            "model": filename, "temperature": 0, "max_output_tokens": 512,
+            "response_format": {"type": "json_object", "schema": chunk_boundary_schema(paragraph_count)},
+        })
 
     def _answer(self, system: str, prompt: str, options: dict | None = None) -> str:
         filename = (options or {}).get("model", LLM_FILENAME)
@@ -106,12 +110,13 @@ class LocalLLM:
                                 chat_format=DEFAULTS["ask"]["chat_format"], verbose=False)
             self._loaded_path = model_path
         self._model.reset()
+        extra = {"response_format": options["response_format"]} if options and "response_format" in options else {}
         response = self._model.create_chat_completion(
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": prompt}],
             temperature=(options or {}).get("temperature", DEFAULTS["ask"]["temperature"]),
             max_tokens=(options or {}).get("max_output_tokens", DEFAULTS["ask"]["max_output_tokens"]),
-            seed=(options or {}).get("seed", DEFAULTS["ask"]["seed"]))
+            seed=(options or {}).get("seed", DEFAULTS["ask"]["seed"]), **extra)
         return str(response["choices"][0]["message"]["content"] or "")
 
 

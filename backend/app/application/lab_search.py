@@ -21,6 +21,7 @@ class LabSearchService(SearchService):
                          llm=standard.llm, operations=standard.operations)
         self.config_service = config_service
         self.registry = registry
+        self.vector_profile = "pipeline_lab"
 
     def version_for(self, project_id: UUID) -> str:
         return document_version(self.config_service.effective(project_id)) + (
@@ -70,15 +71,16 @@ class LabSearchService(SearchService):
                 settings = config["document"]["chunking"]
                 chunker = self.registry.get("chunking", settings["plugin"]).implementation
                 passages = chunker(str(project_id), str(document_id), document.content_hash,
-                                   segments, version, settings, embeddings=self.embeddings, llm=self.llm)
+                                   segments, version, settings, embeddings=self.embeddings,
+                                   llm=self._chunk_llm(settings))
                 if self.embeddings.ready and passages:
                     self.repository.mark(str(project_id), str(document_id), "indexing", "embedding", version, document.content_hash)
                     vectors = self.embeddings.embed([row["text"] for row in passages])
-                    self.vectors.upsert([row["id"] for row in passages], [row["text"] for row in passages],
+                    self._vectors_for(project_id).upsert([row["id"] for row in passages], [row["text"] for row in passages],
                                         vectors, str(project_id), str(document_id))
                 else:
                     # Remove vectors left from a former configuration or model state.
-                    self.vectors.delete(str(project_id), str(document_id))
+                    self._vectors_for(project_id).delete(str(project_id), str(document_id))
                 self.repository.replace(str(project_id), str(document_id), passages, version, document.content_hash)
             except Exception as error:
                 logger.exception("Pipeline Lab indexing failed for %s", document_id)
@@ -98,7 +100,8 @@ class LabSearchService(SearchService):
         chunker = self.registry.get("chunking", settings["plugin"]).implementation
         passages = chunker(str(project_id), str(document_id), document.content_hash,
                            self.documents.content(project_id, document_id)["segments"],
-                           self.version_for(project_id), settings, embeddings=self.embeddings, llm=self.llm)
+                           self.version_for(project_id), settings, embeddings=self.embeddings,
+                           llm=self._chunk_llm(settings))
         return {"count": len(passages),
                 "average_characters": round(sum(len(row["text"]) for row in passages) / len(passages)) if passages else 0,
                 "samples": passages[:12]}
@@ -134,7 +137,7 @@ class LabSearchService(SearchService):
         semantic = []
         if use_semantic and self.embeddings.ready:
             vector = self.embeddings.embed([query])[0]
-            semantic = self.vectors.search_with_distances(str(project_id), vector, config["semantic_candidates"])
+            semantic = self._vectors_for(project_id).search_with_distances(str(project_id), vector, config["semantic_candidates"])
             threshold = config["similarity_threshold"]
             if threshold is not None:
                 semantic = [(pid, distance) for pid, distance in semantic if distance <= threshold]

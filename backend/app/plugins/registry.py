@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 import importlib
 import pkgutil
+import re
 from typing import Callable
 
 
@@ -28,7 +29,7 @@ class PluginRegistry:
     def __init__(self, plugins: list[Plugin]):
         self._plugins = {}
         for plugin in plugins:
-            if not plugin.id.isidentifier() or plugin.category not in CATEGORIES:
+            if not re.fullmatch(r"[a-z][a-z0-9_-]{2,63}", plugin.id) or plugin.category not in CATEGORIES:
                 raise ValueError(f"Invalid plugin identity: {plugin.id}")
             if (plugin.category, plugin.id) in self._plugins:
                 raise ValueError(f"Duplicate plugin: {plugin.id}")
@@ -51,10 +52,15 @@ class PluginRegistry:
         return [plugin.public() for plugin in self._plugins.values()]
 
     @classmethod
-    def discover(cls) -> "PluginRegistry":
+    def discover(cls, config_path=None, data_dir=None) -> "PluginRegistry":
         package = importlib.import_module("app.plugins.builtins")
         discovered = []
         for module in pkgutil.iter_modules(package.__path__, package.__name__ + "."):
             implementation = importlib.import_module(module.name)
             discovered.extend(getattr(implementation, "PLUGINS", ()))
+        if config_path is not None:
+            from app.plugins.instances import PluginInstanceStore, configured_plugin
+            root = data_dir or config_path.parent.parent
+            discovered.extend(configured_plugin(item, root) for item in PluginInstanceStore(config_path).list()
+                              if item["enabled"])
         return cls(discovered)

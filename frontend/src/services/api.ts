@@ -1,7 +1,7 @@
 ﻿import type { Project } from "../types/projects";
 import type { DocumentItem, ImportOutcome, Segment } from "../types/documents";
 import type { Answer, IndexState, ModelState, Models, Passage } from "../types/search";
-import type { Plugin, PipelineState, PipelineSettings, LabPassage, ChunkPreview, LabIndexState } from "../types/pipeline";
+import type { Plugin, PluginDriver, PluginInstance, PipelineState, PipelineSettings, LabPassage, ChunkPreview, LabIndexState } from "../types/pipeline";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -53,6 +53,12 @@ export const searchApi = {
 let pluginRegistryRequest: Promise<{ plugins: Plugin[] }> | undefined;
 export const pipelineApi = {
   registry: () => pluginRegistryRequest ??= request<{ plugins: Plugin[] }>("/api/plugins"),
+  pluginDrivers: () => request<{ drivers: PluginDriver[] }>("/api/plugin-drivers"),
+  pluginInstances: () => request<{ plugins: PluginInstance[] }>("/api/plugin-instances"),
+  createPlugin: (plugin: PluginInstance) => request<PluginInstance>("/api/plugin-instances", { method: "POST", body: JSON.stringify(plugin) }),
+  updatePlugin: (id: string, plugin: PluginInstance) => request<PluginInstance>(`/api/plugin-instances/${id}`, { method: "PUT", body: JSON.stringify(plugin) }),
+  deletePlugin: (id: string) => request<void>(`/api/plugin-instances/${id}`, { method: "DELETE" }),
+  testPlugin: (plugin: PluginInstance) => request<{ connected: boolean; message: string; resource_count: number }>("/api/plugin-instances/test", { method: "POST", body: JSON.stringify(plugin) }),
   state: (projectId: string) => request<PipelineState>(`/api/projects/${projectId}/pipeline`),
   save: (projectId: string, overrides: Partial<PipelineSettings>, keepalive = false) => request<PipelineState>(`/api/projects/${projectId}/pipeline`, { method: "PUT", body: JSON.stringify({ overrides }), keepalive }),
   ensureIndex: (projectId: string) => request<{ status: string }>(`/api/projects/${projectId}/pipeline/index/ensure`, { method: "POST" }),
@@ -65,4 +71,3 @@ export const pipelineApi = {
   testProvider: (id: string) => request<{ connected: boolean; model_count: number }>(`/api/providers/${id}/test`, { method: "POST" }),
   models: (id: string) => request<{ models: { id: string; name: string }[] }>(`/api/providers/${id}/models`)
 };
-

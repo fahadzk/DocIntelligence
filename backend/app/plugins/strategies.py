@@ -1,8 +1,9 @@
-﻿"""Built-in strategy implementations shared by Pipeline Lab and the existing engines."""
-import json
+"""Built-in strategy implementations shared by Pipeline Lab and the existing engines."""
 import math
 import re
 from uuid import NAMESPACE_URL, uuid5
+
+from app.plugins.chunking_output import parse_boundaries
 
 
 def sliding_window(project_id, document_id, content_hash, segments, version, settings, **_):
@@ -68,8 +69,8 @@ def semantic(project_id, document_id, content_hash, segments, version, settings,
 
 
 def llm(project_id, document_id, content_hash, segments, version, settings, llm=None, **_):
-    if llm is None or not llm.ready_for(settings["model"]):
-        raise RuntimeError("Set up the local answer model before using LLM chunking.")
+    if llm is None:
+        raise RuntimeError("Select a language model provider for LLM chunking.")
     result = []
     for segment in segments:
         paragraphs = _paragraphs(segment["text"])
@@ -79,22 +80,34 @@ def llm(project_id, document_id, content_hash, segments, version, settings, llm=
         breaks = set()
         for base in range(0, len(paragraphs), 12):
             batch = paragraphs[base:base + 12]
-            numbered = "\n".join(f"{index}: {item[2][:220]}" for index, item in enumerate(batch))
-            system = ("Return only a JSON array of paragraph indices where a new "
-                      f"{settings['chunk_by']} begins. Indices must be 1 or greater.")
-            if hasattr(llm, "answer_chunk"):
-                response = llm.answer_chunk(system, numbered, settings["model"])
-            else:
-                response = llm.answer(system, numbered)
-            try:
-                indices = json.loads(response)
-            except json.JSONDecodeError as error:
-                raise RuntimeError("The local model did not return usable chunk boundaries.") from error
-            if not isinstance(indices, list) or any(type(i) is not int or i < 1 or i >= len(batch) for i in indices):
-                raise RuntimeError("The local model returned invalid chunk boundaries.")
-            breaks.update(base + i for i in indices)
             if base:
                 breaks.add(base)
+            if len(batch) == 1:
+                continue  # A single paragraph has no possible internal boundaries.
+            numbered = "\n".join(f"{index}: {item[2][:220]}" for index, item in enumerate(batch))
+            system = (f"Find paragraph boundaries where a new {settings['chunk_by']} begins. "
+                      'Return only a JSON object {"boundaries": [1]}. '
+                      f"Use zero-based paragraph indices from 1 to {len(batch) - 1}. "
+                      'Return {"boundaries": []} if no new topic begins. '
+                      "Do not include reasoning, Markdown, or rewritten source text.")
+            model = settings.get("llm_model", settings.get("model", ""))
+            for attempt in range(2):
+                if hasattr(llm, "answer_chunk"):
+                    response = llm.answer_chunk(system, numbered, model, paragraph_count=len(batch))
+                else:
+                    response = llm.answer(system, numbered)
+                try:
+                    indices = parse_boundaries(response, len(batch))
+                    break
+                except ValueError as error:
+                    if attempt:
+                        provider = settings.get("llm_provider", "llamacpp")
+                        raise RuntimeError(
+                            f"LLM chunking ({provider}, {model}) returned unusable boundaries "
+                            f"after two attempts: {error}. Try a model that supports structured JSON output."
+                        ) from error
+                    system += " Your previous response was invalid. Return only the required JSON object."
+            breaks.update(base + i for i in indices)
         result.extend(_group_paragraphs(project_id, document_id, content_hash, segment, version,
                                         paragraphs, breaks, 1, settings["max_chunk_size"]))
     return result

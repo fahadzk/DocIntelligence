@@ -99,3 +99,6 @@ class CloudProvider:
             "generationConfig": {"temperature": temperature, "maxOutputTokens": max_output_tokens}})
         return "".join(part.get("text", "") for candidate in result.get("candidates", [])[:1]
                        for part in candidate.get("content", {}).get("parts", []))
+
+    def answer_chunk(self, system: str, prompt: str, model: str, *, paragraph_count: int = 12) -> str:
+        return self.answer(system, prompt, model, 0, 512)

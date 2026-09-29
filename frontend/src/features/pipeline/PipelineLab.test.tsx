@@ -30,11 +30,11 @@ function setup() {
   vi.spyOn(pipelineApi, "ensureIndex").mockResolvedValue({ status: "indexing" });
   vi.spyOn(pipelineApi, "providers").mockResolvedValue([]);
   vi.spyOn(documentsApi, "list").mockResolvedValue([]);
-  vi.spyOn(searchApi, "models").mockResolvedValue({ embeddings: { status: "ready", error: null, name: "BGE", size_mb: 70, source: "" }, answers: { status: "ready", error: null, name: "Qwen", size_mb: 1070, source: "" } });
+  vi.spyOn(searchApi, "models").mockResolvedValue({ embeddings: { status: "ready", error: null, name: "BGE", size_mb: 70, source: "" }, answers: { status: "ready", error: null, name: "Qwen", size_mb: 1070, source: "", models: [] } });
   return state;
 }
 
-test("renders schema fields and saves changes without a button", async () => {
+test("saves document settings without starting reindexing", async () => {
   const state = setup();
   const save = vi.spyOn(pipelineApi, "save").mockResolvedValue(state);
   render(<PipelineLab project={project} registry={registry} />);
@@ -42,47 +42,30 @@ test("renders schema fields and saves changes without a button", async () => {
   fireEvent.change(screen.getByLabelText(/^Chunking strategy/), { target: { value: "semantic" } });
   expect(await screen.findByText("Sensitivity")).toBeInTheDocument();
   expect(screen.queryByText("Chunk size")).not.toBeInTheDocument();
-  expect(screen.getByText("Settings save automatically. Experiments become available once saving finishes.")).toBeInTheDocument();
-  await waitFor(() => expect(save).toHaveBeenCalledWith(project.id, { document: { chunking: { plugin: "semantic" } } }), { timeout: 2500 });
-  expect(screen.queryByRole("button", { name: "Save pipeline" })).not.toBeInTheDocument();
+  expect(screen.getByText("Changes are drafts until you select Save. Search and Ask changes apply after saving.")).toBeInTheDocument();
+  expect(screen.getByText("Saved Document changes take effect when you select Re-chunk & re-index for a document in Documents.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith(project.id, { document: { chunking: { plugin: "semantic" } } }));
+  expect(pipelineApi.ensureIndex).not.toHaveBeenCalled();
+  expect(await screen.findByText("Settings saved. Document changes will be used the next time you re-chunk and re-index a document.")).toBeInTheDocument();
 });
 
-test("a slow save cannot replace a newer edit", async () => {
-  setup();
-  let finishFirst!: (value: PipelineState) => void;
-  const first = new Promise<PipelineState>((resolve) => { finishFirst = resolve; });
-  const saved = (size: number) => ({ defaults: effective, overrides: { document: { chunking: { chunk_size: size } } }, effective: {
-    ...effective, document: { ...effective.document, chunking: { ...effective.document.chunking, chunk_size: size } }
-  } }) as unknown as PipelineState;
-  const save = vi.spyOn(pipelineApi, "save").mockReturnValueOnce(first).mockResolvedValueOnce(saved(902));
+test("keeps edits pending until Save is selected", async () => {
+  const state = setup();
+  const save = vi.spyOn(pipelineApi, "save").mockResolvedValue(state);
   render(<PipelineLab project={project} registry={registry} />);
   const size = await screen.findByLabelText("Chunk size");
   fireEvent.change(size, { target: { value: "901" } });
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(1), { timeout: 2500 });
-  fireEvent.change(size, { target: { value: "902" } });
-  await act(async () => finishFirst(saved(901)));
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(2), { timeout: 2500 });
-  await waitFor(() => expect(size).toHaveValue(902));
+  await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+  expect(save).not.toHaveBeenCalled();
+  expect(size).toHaveValue(901);
 });
 
-test("leaving immediately after an edit flushes the pending settings", async () => {
+test("leaving with a draft does not save it", async () => {
   const state = setup();
   const save = vi.spyOn(pipelineApi, "save").mockResolvedValue(state);
   const view = render(<PipelineLab project={project} registry={registry} />);
   fireEvent.change(await screen.findByLabelText("Chunk size"), { target: { value: "904" } });
   view.unmount();
-  await waitFor(() => expect(save).toHaveBeenCalledWith(project.id, { document: { chunking: { chunk_size: 904 } } }, true));
-});
-
-test("shows the exact returned Ask context on request", async () => {
-  setup();
-  vi.spyOn(pipelineApi, "ask").mockResolvedValue({ answer: "Europa orbits Jupiter [1].", supported: true,
-    evidence: [], context: [{ document: "facts.txt", label: "Paragraph 1", chunk_id: "source-chunk", text: "Europa orbits Jupiter.", characters: 23, page_number: null }] });
-  render(<PipelineLab project={project} registry={registry} />);
-  fireEvent.click(await screen.findByRole("button", { name: "ASK" }));
-  fireEvent.change(screen.getByLabelText("Question"), { target: { value: "What does Europa orbit?" } });
-  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
-  expect(await screen.findByText("Inspect Context")).toBeInTheDocument();
-  fireEvent.click(screen.getByText("Inspect Context"));
-  await waitFor(() => expect(screen.getByText("Chunk source-chunk · 23 characters")).toBeInTheDocument());
+  expect(save).not.toHaveBeenCalled();
 });

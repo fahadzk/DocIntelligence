@@ -3,16 +3,15 @@ import json
 from datetime import datetime, timezone
 from uuid import UUID
 
-from app.config.pipeline_defaults import DEFAULTS, resolve, document_version
+from app.config.pipeline_defaults import DEFAULTS, resolve
 from app.domain.documents import DocumentError
 from app.infrastructure.search_repository import SearchRepository
 
 
 class PipelineConfigService:
-    def __init__(self, repository: SearchRepository, registry, on_document_change=None):
+    def __init__(self, repository: SearchRepository, registry):
         self.repository = repository
         self.registry = registry
-        self.on_document_change = on_document_change
 
     def _require_project(self, project_id: UUID):
         with self.repository.connect() as connection:
@@ -37,15 +36,12 @@ class PipelineConfigService:
             self.validate(candidate)
         except (TypeError, ValueError) as error:
             raise DocumentError("INVALID_PIPELINE_CONFIG", str(error), 422) from error
-        old_version = document_version(self.effective(project_id))
         encoded = json.dumps(overrides, sort_keys=True)
         with self.repository.connect() as connection:
             connection.execute("""INSERT INTO project_pipeline_config VALUES (?, ?, ?)
                 ON CONFLICT(project_id) DO UPDATE SET overrides_json=excluded.overrides_json,
                 updated_at=excluded.updated_at""",
                 (str(project_id), encoded, datetime.now(timezone.utc).isoformat()))
-        if self.on_document_change and document_version(candidate) != old_version:
-            self.on_document_change(project_id)
         return {"defaults": DEFAULTS, "overrides": overrides, "effective": candidate}
 
     def state(self, project_id: UUID) -> dict:
@@ -63,6 +59,8 @@ class PipelineConfigService:
                     ("rerankers", search["reranker"]), ("llm_providers", ask["provider"])]
         for category, plugin_id in selected:
             self.registry.get(category, plugin_id)
+        if document["chunking"]["plugin"] == "llm":
+            self.registry.get("llm_providers", document["chunking"].get("llm_provider", ""))
         groups = [(document["chunking"], self.registry.get("chunking", document["chunking"]["plugin"])),
                   (document["embedding"], self.registry.get("embeddings", document["embedding"]["plugin"])),
                   (document["vector_store"], self.registry.get("vector_stores", document["vector_store"]["plugin"])),

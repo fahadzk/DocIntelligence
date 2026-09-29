@@ -28,6 +28,7 @@ from app.application.search import SearchService
 from app.application.lab_search import LabSearchService
 from app.application.pipeline_config import PipelineConfigService
 from app.plugins.registry import PluginRegistry
+from app.plugins.instances import PluginInstanceStore
 from app.config.settings import get_settings
 from app.domain.documents import DocumentError
 from app.infrastructure.operational_logging import OperationalLogger
@@ -84,7 +85,13 @@ def get_search_service() -> SearchService:
 
 @lru_cache
 def get_plugin_registry() -> PluginRegistry:
-    return PluginRegistry.discover()
+    settings = get_settings()
+    return PluginRegistry.discover(settings.data_dir / "config" / "plugins.json", settings.data_dir)
+
+
+@lru_cache
+def get_plugin_instance_store() -> PluginInstanceStore:
+    return PluginInstanceStore(get_settings().data_dir / "config" / "plugins.json")
 
 
 @lru_cache

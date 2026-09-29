@@ -1,4 +1,4 @@
-﻿"""Bundled strategies. Adding another module beside this one extends discovery."""
+"""Bundled strategies. Adding another module beside this one extends discovery."""
 from app.plugins.registry import Plugin
 from app.plugins import strategies
 from app.infrastructure.local_models import LocalEmbeddings, LocalLLM, ChromaVectorStore
@@ -21,18 +21,17 @@ PLUGINS = [
         field("min_chunk_size", "Minimum characters", "number", min=50, max=4000),
         field("max_chunk_size", "Maximum characters", "number", min=100, max=4000)),
         {"requires_embeddings": True, "source_locations": True}, strategies.semantic),
-    Plugin("llm", "LLM", "Suggest paragraph boundaries with the installed local model.", "chunking", (
-        field("model", "Chunking model", "model_select"),
+    Plugin("llm", "LLM", "Suggest paragraph boundaries with the selected model provider.", "chunking", (
         field("chunk_by", "Chunk by", "select", options=["topic", "section", "concept"]),
         field("max_chunk_size", "Maximum characters", "number", min=100, max=4000),
         field("preserve_headings", "Preserve headings", "boolean")),
-        {"requires_answer_model": True, "source_locations": True}, strategies.llm),
+        {"source_locations": True}, strategies.llm),
     Plugin("fastembed_bge_small", "BGE Small / FastEmbed", "Local ONNX English embeddings, 384 dimensions.", "embeddings", (
         field("model", "Model", "select", options=["BAAI/bge-small-en-v1.5"]),),
         {"local": True, "dimensions": 384}, LocalEmbeddings),
     Plugin("chroma", "Chroma", "Persistent local vector collection.", "vector_stores", (
         field("distance", "Distance", "select", options=["l2"]),),
-        {"local": True}, ChromaVectorStore),
+        {"local": True, "location": "local", "driver": "chroma"}, ChromaVectorStore),
     Plugin("keyword", "Keyword", "SQLite FTS5 and BM25 ordering.", "retrieval", (
         field("keyword_candidates", "Candidates", "number", min=1, max=100),
         field("result_limit", "Results", "number", min=1, max=50)),
@@ -63,6 +62,6 @@ PLUGINS = [
         field("model", "Model", "model_select"),
         field("temperature", "Temperature", "slider", min=0, max=1, step=0.05),
         field("max_output_tokens", "Maximum output tokens", "number", min=64, max=2048)),
-        {"local": True, "model_discovery": True, "temperature": True,
+        {"local": True, "location": "local", "driver": "llamacpp", "model_discovery": True, "temperature": True,
          "streaming": False, "system_prompt": True}, LocalLLM),
 ]

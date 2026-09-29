@@ -31,7 +31,7 @@ export interface ModelState {
   source: string;
   models?: { id: string; name: string }[];
 }
-export interface Models { embeddings: ModelState; answers: ModelState }
+export interface Models { embeddings: ModelState; answers: ModelState & { models: { id: string; name: string }[] } }
 export interface Answer {
   answer: string;
   supported: boolean;

@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 
+import pytest
+
 from app.config.pipeline_defaults import DEFAULTS, document_version, resolve
 from app.plugins.registry import Plugin, PluginRegistry
 from app.plugins.strategies import semantic, llm
@@ -86,6 +88,26 @@ def test_invalid_plugin_and_settings_are_rejected(client):
     bad = client.put(f"/api/projects/{pid}/pipeline", json={"overrides": {"document": {"chunking": {"chunk_size": 100, "overlap": 120}}}})
     assert bad.status_code == 422
     assert client.get(f"/api/projects/{pid}/pipeline").json()["overrides"] == {}
+
+
+def test_saved_document_settings_wait_for_explicit_reindex(client):
+    pid = project(client)
+    doc = document(client, pid, text="Europa orbits Jupiter. " * 80)
+    from app.main import get_pipeline_config, get_search_service
+    service = get_search_service()
+    service.ensure_indexes()
+    before = next(item for item in service.repository.status(pid) if item["document_id"] == doc)
+
+    get_pipeline_config().save(UUID(pid), {
+        "document": {"chunking": {"chunk_size": 300, "overlap": 50}},
+    })
+    service.ensure_indexes()
+    deferred = next(item for item in service.repository.status(pid) if item["document_id"] == doc)
+    assert deferred["index_version"] == before["index_version"]
+
+    service.index_document(UUID(pid), UUID(doc), force=True)
+    applied = next(item for item in service.repository.status(pid) if item["document_id"] == doc)
+    assert applied["index_version"] != before["index_version"]
 
 
 def test_semantic_and_llm_chunkers_preserve_offsets():
@@ -289,3 +311,58 @@ def test_shared_local_embedding_model_runs_one_job_at_a_time(tmp_path, monkeypat
     assert values == [[[1.0]], [[1.0]]]
     assert initialized == 1
     assert peak == 1
+
+
+@pytest.mark.parametrize("provider, model", [
+    ("llamacpp", "chunking-local.gguf"),
+    ("ollama", "chunking-ollama:latest"),
+])
+def test_document_reindex_and_lab_preview_use_chunking_provider(client, monkeypatch, provider, model):
+    from app.main import get_search_service
+    from app.infrastructure.local_models import LocalLLM
+    from app.plugins.ollama_provider import OllamaProvider
+
+    calls = []
+
+    def local_chunk(self, system, prompt, filename, *, paragraph_count):
+        assert paragraph_count == 2
+        calls.append(("llamacpp", filename))
+        return "[]"
+
+    def ollama_request(self, method, path, payload=None):
+        assert path == "/api/chat"
+        assert payload["format"]["required"] == ["boundaries"]
+        assert payload["options"]["temperature"] == 0
+        calls.append(("ollama", payload["model"]))
+        return {"message": {"content": '{"boundaries": []}'}}
+
+    monkeypatch.setattr(LocalLLM, "answer_chunk", local_chunk)
+    monkeypatch.setattr(OllamaProvider, "_request", ollama_request)
+    pid = project(client)
+    doc = document(client, pid)
+    service = get_search_service()
+    service.ensure_indexes()
+    # Ensure a model call is needed; text extraction normally emits one segment per paragraph.
+    monkeypatch.setattr(service.documents, "content", lambda *_: {"segments": [{
+        "index": 0, "text": "Europa orbits Jupiter.\n\nJupiter is a planet.", "label": "Page 1",
+        "page_number": 1, "paragraph_number": None,
+    }]})
+    saved = client.put(f"/api/projects/{pid}/pipeline", json={"overrides": {
+        "document": {"chunking": {"plugin": "llm", "llm_provider": provider, "llm_model": model}},
+        "ask": {"provider": "llamacpp", "model": "different-answer-model.gguf"},
+    }})
+    assert saved.status_code == 200, saved.text
+
+    # The Documents reindex endpoint delegates to this shared indexing method.
+    service.index_document(UUID(pid), UUID(doc), force=True)
+    state = next(item for item in service.repository.status(pid) if item["document_id"] == doc)
+    assert state["status"] == "ready", state
+    chunks = service.chunks(UUID(pid), UUID(doc))
+    assert chunks
+    assert calls and all(call == (provider, model) for call in calls)
+
+    calls.clear()
+    preview = client.post(f"/api/projects/{pid}/pipeline/preview", json={"document_id": doc})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["count"] == len(chunks)
+    assert calls and all(call == (provider, model) for call in calls)
