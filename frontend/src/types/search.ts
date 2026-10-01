@@ -24,12 +24,14 @@ export interface IndexState {
   error_message: string | null;
 }
 export interface ModelState {
-  status: "not_installed" | "downloading" | "ready" | "failed";
+  status: "not_installed" | "not_ready" | "downloading" | "ready" | "failed";
   error: string | null;
   name: string;
   size_mb: number;
   source: string;
   models?: { id: string; name: string }[];
+  location?: "local" | "network" | "cloud";
+  managed?: boolean;
 }
 export interface Models { embeddings: ModelState; answers: ModelState & { models: { id: string; name: string }[] } }
 export interface Answer {

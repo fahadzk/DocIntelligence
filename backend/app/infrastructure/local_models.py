@@ -24,19 +24,45 @@ class LLMProvider(Protocol):
 
 
 class LocalEmbeddings:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, model_name: str = EMBED_MODEL):
         self.directory = directory
+        self.model_name = model_name
         self._model = None
         self._embedding_lock = threading.Lock()
 
+    def available_models(self) -> list[str]:
+        if not self.directory.exists():
+            return [EMBED_MODEL] if self.model_name == EMBED_MODEL and (self.directory / "ready").is_file() else []
+        try:
+            from fastembed import TextEmbedding
+            supported = TextEmbedding.list_supported_models()
+        except Exception:
+            return [EMBED_MODEL] if (self.directory / "ready").is_file() else []
+        found = []
+        for item in supported:
+            repository = item.get("sources", {}).get("hf")
+            if not isinstance(repository, str):
+                continue
+            cache_name = "models--" + repository.replace("/", "--")
+            if (self.directory / cache_name).is_dir():
+                found.append(item["model"])
+        if (self.directory / "ready").is_file() and EMBED_MODEL not in found:
+            found.append(EMBED_MODEL)
+        return sorted(set(found))
+
+    def models(self) -> list[dict]:
+        return [{"id": item, "name": item} for item in self.available_models()]
+
     @property
     def ready(self) -> bool:
-        return (self.directory / "ready").is_file()
+        if self.model_name == EMBED_MODEL and (self.directory / "ready").is_file():
+            return True
+        return self.model_name in self.available_models()
 
     def provision(self) -> None:
         from fastembed import TextEmbedding
         self.directory.mkdir(parents=True, exist_ok=True)
-        self._model = TextEmbedding(model_name=EMBED_MODEL, cache_dir=str(self.directory),
+        self._model = TextEmbedding(model_name=self.model_name, cache_dir=str(self.directory),
                                     threads=2, local_files_only=False)
         (self.directory / "ready").touch()
 
@@ -46,7 +72,7 @@ class LocalEmbeddings:
         with self._embedding_lock:
             if self._model is None:
                 from fastembed import TextEmbedding
-                self._model = TextEmbedding(model_name=EMBED_MODEL, cache_dir=str(self.directory),
+                self._model = TextEmbedding(model_name=self.model_name, cache_dir=str(self.directory),
                                             threads=2, local_files_only=True)
             return [vector.tolist() for vector in self._model.embed(texts)]
 

@@ -102,3 +102,6 @@ class PipelineConfigService:
             raise ValueError("Require citations must be true or false")
         if not isinstance(ask["model"], str) or len(ask["model"]) > 160:
             raise ValueError("Invalid answer model")
+        embedding_model = document["embedding"]["model"]
+        if not isinstance(embedding_model, str) or not embedding_model or len(embedding_model) > 200:
+            raise ValueError("Choose an embedding model")

@@ -101,7 +101,7 @@ test("searches and opens cited evidence in the project workspace", async () => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, options?: RequestInit) => {
     if (url.endsWith("/api/projects")) return reply([project]);
     if (url.endsWith("/documents")) return reply([]);
-    if (url.endsWith("/api/models")) return reply({ embeddings: ready, answers: ready });
+    if (url.includes("/api/models")) return reply({ embeddings: ready, answers: ready });
     if (url.endsWith("/index/status")) return reply([]);
     if (url.endsWith("/search") && options?.method === "POST") return reply({ results: [passage] });
     if (url.endsWith("/ask") && options?.method === "POST") return reply({ answer: "Europa orbits Jupiter [1].", supported: true, evidence: [{ number: 1, passage }] });

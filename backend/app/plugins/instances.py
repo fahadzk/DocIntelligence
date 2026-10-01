@@ -13,6 +13,27 @@ from app.domain.documents import DocumentError
 
 
 DRIVERS = (
+    {"id": "fastembed", "name": "FastEmbed directory", "category": "embeddings", "category_name": "EM",
+     "locations": ["local"], "description": "Use FastEmbed models already present in a local model-cache directory.",
+     "schema": [
+         {"key": "directory", "label": "Model directory", "type": "text", "required": True,
+          "default": "models/embeddings", "placeholder": "models/embeddings"}]},
+    {"id": "ollama", "name": "Ollama embeddings", "category": "embeddings", "category_name": "EM",
+     "locations": ["local", "network"], "description": "Discover and use embedding models served by Ollama.",
+     "schema": [
+         {"key": "base_url", "label": "Server URL", "type": "text", "required": True,
+          "placeholder": "http://192.168.1.25:11434"},
+         {"key": "timeout_seconds", "label": "Timeout (seconds)", "type": "number",
+          "min": 5, "max": 600, "default": 120}]},
+    {"id": "openai_compatible", "name": "OpenAI-compatible embeddings", "category": "embeddings", "category_name": "EM",
+     "locations": ["network", "cloud"], "description": "Connect to OpenAI or another service exposing compatible model and embedding APIs.",
+     "schema": [
+         {"key": "base_url", "label": "API base URL", "type": "text", "required": True,
+          "default": "https://api.openai.com/v1", "placeholder": "https://api.openai.com/v1"},
+         {"key": "api_key", "label": "API key", "type": "password", "secret": True,
+          "placeholder": "Stored in the operating system credential vault"},
+         {"key": "timeout_seconds", "label": "Timeout (seconds)", "type": "number",
+          "min": 5, "max": 300, "default": 60}]},
     {"id": "ollama", "name": "Ollama", "category": "llm_providers", "category_name": "LLM",
      "locations": ["local", "network"], "description": "Connect to an Ollama server and discover its installed models.",
      "schema": [
@@ -128,13 +149,15 @@ def validate_instance(value: dict) -> dict:
         elif not isinstance(field_value, str):
             raise ValueError(f"{field['label']} must be text")
         normalized[key] = field_value
-    if driver_id in ("ollama", "qdrant"):
-        url_key = "base_url" if driver_id == "ollama" else "url"
+    if driver_id in ("ollama", "qdrant", "openai_compatible"):
+        url_key = "url" if driver_id == "qdrant" else "base_url"
         parsed = urlparse(normalized[url_key])
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("Server URL must be an HTTP or HTTPS address without embedded credentials")
-        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        if driver_id != "openai_compatible" and parsed.path not in ("", "/"):
             raise ValueError("Server URL cannot contain a path, query, or fragment")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Server URL cannot contain a query or fragment")
         normalized[url_key] = normalized[url_key].rstrip("/")
     if driver_id in ("chroma", "qdrant"):
         names = [normalized["collection_name"]]
@@ -206,14 +229,38 @@ class PluginInstanceStore:
 
 
 def configured_plugin(record: dict, data_dir: Path):
-    from app.infrastructure.local_models import ChromaVectorStore
+    from app.infrastructure.local_models import ChromaVectorStore, LocalEmbeddings
     from app.infrastructure.qdrant_vector_store import QdrantVectorStore
     from app.plugins.ollama_provider import OllamaProvider
+    from app.plugins.embedding_providers import OllamaEmbeddings, OpenAICompatibleEmbeddings
     from app.plugins.registry import Plugin
 
     item = validate_instance(record)
+    settings, location = deepcopy(item["settings"]), item["location"]
+    if item["category"] == "embeddings":
+        capabilities = {"local": location == "local", "location": location, "driver": item["driver"],
+                        "model_discovery": True, "configured": True}
+        schema = ({"key": "model", "label": "Model", "type": "model_select"},)
+        if item["driver"] == "fastembed":
+            directory = Path(settings["directory"])
+            if not directory.is_absolute():
+                directory = data_dir / directory
+            return Plugin(item["id"], item["name"], "FastEmbed models from a local directory.", "embeddings",
+                          schema, capabilities,
+                          lambda _directory=None, model="", path=directory: LocalEmbeddings(path, model))
+        if item["driver"] == "ollama":
+            return Plugin(item["id"], item["name"], f"{location.title()} Ollama embedding service.", "embeddings",
+                          schema, capabilities,
+                          lambda _directory=None, model="", values=settings: OllamaEmbeddings(
+                              values["base_url"], values["timeout_seconds"], model))
+        if item["driver"] == "openai_compatible":
+            return Plugin(item["id"], item["name"], f"{location.title()} OpenAI-compatible embedding service.",
+                          "embeddings", schema, capabilities,
+                          lambda _directory=None, model="", values=settings, plugin_id=item["id"]: OpenAICompatibleEmbeddings(
+                              values["base_url"], values["timeout_seconds"], model,
+                              lambda: values.get("api_key") or _secret(plugin_id, "api_key")))
+        raise ValueError(f"Unsupported embedding driver: {item['driver']}")
     if item["driver"] == "ollama":
-        settings, location = deepcopy(item["settings"]), item["location"]
         return Plugin(item["id"], item["name"], f"{location.title()} Ollama connection.", "llm_providers", (
             {"key": "model", "label": "Model", "type": "model_select"},
             {"key": "temperature", "label": "Temperature", "type": "slider", "min": 0, "max": 1, "step": 0.05},
@@ -221,7 +268,6 @@ def configured_plugin(record: dict, data_dir: Path):
             {"local": location == "local", "location": location, "driver": "ollama", "model_discovery": True,
              "configured": True},
             lambda _directory=None, values=settings: OllamaProvider(values["base_url"], values["timeout_seconds"]))
-    settings = deepcopy(item["settings"])
     if item["driver"] == "qdrant":
         return Plugin(item["id"], item["name"], f"{item['location'].title()} Qdrant connection.", "vector_stores", (
             {"key": "distance", "label": "Distance", "type": "select", "options": ["l2"]},),
@@ -242,6 +288,11 @@ def configured_plugin(record: dict, data_dir: Path):
 def test_instance(record: dict, data_dir: Path) -> dict:
     item = validate_instance(record)
     plugin = configured_plugin(item, data_dir)
+    if item["category"] == "embeddings":
+        provider = plugin.implementation(data_dir, model="")
+        models = provider.models()
+        message = "Local embedding directory is available" if item["driver"] == "fastembed" else "Embedding provider is available"
+        return {"connected": True, "message": message, "resource_count": len(models), "resources": models}
     if item["category"] == "llm_providers":
         provider = plugin.implementation()
         models = provider.models()

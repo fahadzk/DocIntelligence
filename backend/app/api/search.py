@@ -69,6 +69,8 @@ class ModelResponse(BaseModel):
     size_mb: int
     source: str
     models: list[dict] = []
+    location: str = "local"
+    managed: bool = True
 
 
 class ModelsResponse(BaseModel):
@@ -114,8 +116,8 @@ def ask_project(project_id: UUID, body: AskQuery, search: SearchService = Depend
 
 
 @models_router.get("", response_model=ModelsResponse)
-def models(search: SearchService = Depends(service)):
-    return search.model_status()
+def models(project_id: UUID | None = None, search: SearchService = Depends(service)):
+    return search.model_status(project_id)
 
 
 @models_router.post("/{kind}/setup", response_model=ModelResponse)

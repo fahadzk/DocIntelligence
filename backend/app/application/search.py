@@ -1,5 +1,6 @@
 """Recoverable indexing, hybrid retrieval, and citation-checked local answers."""
 import logging
+import hashlib
 import re
 import sqlite3
 import threading
@@ -15,10 +16,6 @@ from app.infrastructure.local_models import (ChromaVectorStore, LocalEmbeddings,
 from app.infrastructure.search_repository import SearchRepository
 
 logger = logging.getLogger(__name__)
-CHUNK_VERSION = f"segment-{DEFAULTS['document']['chunking']['chunk_size']}-overlap-{DEFAULTS['document']['chunking']['overlap']}-v1"
-
-
-
 def split_segments(project_id: str, document_id: str, content_hash: str,
                     segments: list[dict], version: str) -> list[dict]:
     passages = []
@@ -62,7 +59,9 @@ class SearchService:
         self.data_dir = data_dir
         self.vector_profile = "standard"
         self._vector_cache = {}
+        self._embedding_cache = {}
         models = model_dir or data_dir / "models"
+        self.models_dir = models
         self.embeddings = embeddings or LocalEmbeddings(models / "embeddings")
         self.vectors = vectors or ChromaVectorStore(data_dir / "vectors")
         self.llm = llm or LocalLLM(models / "answers")
@@ -79,7 +78,7 @@ class SearchService:
 
     @property
     def version(self) -> str:
-        return CHUNK_VERSION + ("+bge-small-en-v1.5" if self.embeddings.ready else "+keyword")
+        return document_version(DEFAULTS) + ("+embeddings" if self.embeddings.ready else "+keyword")
 
     def settings_for(self, project_id: UUID) -> dict:
         return self.config_service.effective(project_id) if self.config_service else DEFAULTS
@@ -94,25 +93,60 @@ class SearchService:
             raise DocumentError("INVALID_PROVIDER", "Choose an available LLM provider for chunking.", 422) from error
 
     def _vectors_for(self, project_id: UUID):
-        plugin_id = self.settings_for(project_id)["document"]["vector_store"]["plugin"]
-        if plugin_id == "chroma" or not self.registry:
+        document = self.settings_for(project_id)["document"]
+        plugin_id = document["vector_store"]["plugin"]
+        embedding = document["embedding"]
+        is_default_embedding = (embedding["plugin"] == DEFAULTS["document"]["embedding"]["plugin"]
+                                and embedding["model"] == DEFAULTS["document"]["embedding"]["model"])
+        if (plugin_id == "chroma" and is_default_embedding) or not self.registry:
             return self.vectors
-        if plugin_id not in self._vector_cache:
+        identity = f"{embedding['plugin']}:{embedding['model']}"
+        namespace = hashlib.sha256(identity.encode()).hexdigest()[:10]
+        cache_key = (plugin_id, namespace)
+        if cache_key not in self._vector_cache:
             plugin = self.registry.get("vector_stores", plugin_id)
-            self._vector_cache[plugin_id] = plugin.implementation(self.data_dir, profile=self.vector_profile)
-        return self._vector_cache[plugin_id]
+            profile = f"{self.vector_profile}_{namespace}"
+            self._vector_cache[cache_key] = plugin.implementation(self.data_dir, profile=profile)
+        return self._vector_cache[cache_key]
+
+    def _embeddings_for(self, project_id: UUID):
+        settings = self.settings_for(project_id)["document"]["embedding"]
+        plugin_id, model = settings["plugin"], settings["model"]
+        if (not self.registry or
+                (plugin_id == DEFAULTS["document"]["embedding"]["plugin"]
+                 and model == DEFAULTS["document"]["embedding"]["model"])):
+            return self.embeddings
+        cache_key = (plugin_id, model)
+        if cache_key not in self._embedding_cache:
+            if plugin_id == DEFAULTS["document"]["embedding"]["plugin"]:
+                self._embedding_cache[cache_key] = LocalEmbeddings(self.models_dir / "embeddings", model)
+            else:
+                plugin = self.registry.get("embeddings", plugin_id)
+                self._embedding_cache[cache_key] = plugin.implementation(self.data_dir, model=model)
+        return self._embedding_cache[cache_key]
 
     def version_for(self, project_id: UUID) -> str:
         if not self.config_service:
             return self.version
-        return document_version(self.settings_for(project_id)) + ("+bge-small-en-v1.5" if self.embeddings.ready else "+keyword")
+        provider = self._embeddings_for(project_id)
+        return document_version(self.settings_for(project_id)) + ("+embeddings" if provider.ready else "+keyword")
 
-    def model_status(self) -> dict:
+    def model_status(self, project_id: UUID | None = None) -> dict:
         answers_ready = self.llm.ready
+        embedding_status = {"status": self.setup_state["embeddings"],
+                            "error": self.setup_error["embeddings"], "name": EMBED_MODEL,
+                            "size_mb": 70, "source": "https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q",
+                            "location": "local", "managed": True}
+        if project_id is not None:
+            settings = self.settings_for(project_id)["document"]["embedding"]
+            if settings != DEFAULTS["document"]["embedding"]:
+                plugin = self.registry.get("embeddings", settings["plugin"])
+                provider = self._embeddings_for(project_id)
+                embedding_status = {"status": "ready" if provider.ready else "not_ready", "error": None,
+                                    "name": settings["model"] or plugin.name, "size_mb": 0, "source": "",
+                                    "location": plugin.capabilities.get("location", "network"), "managed": False}
         return {
-            "embeddings": {"status": self.setup_state["embeddings"],
-                           "error": self.setup_error["embeddings"], "name": EMBED_MODEL,
-                           "size_mb": 70, "source": "https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q"},
+            "embeddings": embedding_status,
             "answers": {"status": "ready" if answers_ready else self.setup_state["answers"],
                         "error": None if answers_ready else self.setup_error["answers"], "name": LLM_REPOSITORY,
                         "size_mb": 1070, "source": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF",
@@ -174,8 +208,9 @@ class SearchService:
 
     def reembed_document(self, project_id: UUID, document_id: UUID) -> None:
         """Regenerate vectors while retaining the current chunks and keyword index."""
-        if not self.embeddings.ready:
-            raise DocumentError("MODEL_NOT_READY", "Set up the local embedding model first.", 409)
+        embeddings = self._embeddings_for(project_id)
+        if not embeddings.ready:
+            raise DocumentError("MODEL_NOT_READY", "The selected embedding model is not ready.", 409)
         document = self.documents.get(project_id, document_id)
         if document.status != "ready":
             raise DocumentError("DOCUMENT_NOT_READY", "Only readable documents can be embedded.", 409)
@@ -183,7 +218,7 @@ class SearchService:
         if not passages:
             self.index_document(project_id, document_id, force=True)
             return
-        vectors = self.embeddings.embed([item["text"] for item in passages])
+        vectors = embeddings.embed([item["text"] for item in passages])
         store = self._vectors_for(project_id)
         store.delete(str(project_id), str(document_id))
         store.upsert([item["id"] for item in passages], [item["text"] for item in passages], vectors, str(project_id), str(document_id))
@@ -239,34 +274,38 @@ class SearchService:
                     return
                 existing = next((item for item in self.repository.status(str(project_id))
                                  if item["document_id"] == str(document_id)), None)
+                # Configuration edits are drafts until an explicit reindex. A queued
+                # background task must not apply newly saved chunking/embedding settings
+                # to an already healthy index.
                 if (not force and existing and existing["status"] == "ready"
-                        and existing["index_version"] == version
                         and existing["indexed_hash"] == document.content_hash):
                     return
                 self.repository.mark(str(project_id), str(document_id), "indexing", "splitting",
                                      version, document.content_hash)
                 segments = self.documents.content(project_id, document_id)["segments"]
                 settings = self.settings_for(project_id)["document"]["chunking"]
+                embeddings = self._embeddings_for(project_id)
                 if self.registry:
                     chunker = self.registry.get("chunking", settings["plugin"]).implementation
                     passages = chunker(str(project_id), str(document_id), document.content_hash, segments,
-                                       version, settings, embeddings=self.embeddings, llm=self._chunk_llm(settings))
+                                       version, settings, embeddings=embeddings, llm=self._chunk_llm(settings))
                 else:
                     passages = split_segments(str(project_id), str(document_id), document.content_hash, segments, version)
                 self._log(project_id, "chunking.completed", "Split extracted content into passages", document_id=document_id, details={"strategy": settings["plugin"], "segments": len(segments), "passages": len(passages)}, duration_ms=round((perf_counter() - started) * 1000))
-                if self.embeddings.ready and passages:
+                if embeddings.ready and passages:
                     self.repository.mark(str(project_id), str(document_id), "indexing", "embedding",
                                          version, document.content_hash)
                     embedding_started = perf_counter()
-                    self._log(project_id, "embedding.started", "Started local embedding generation", document_id=document_id, details={"provider": "FastEmbed", "model": EMBED_MODEL, "vector_store": "Chroma", "passages": len(passages)})
-                    vectors = self.embeddings.embed([item["text"] for item in passages])
+                    embedding_settings = self.settings_for(project_id)["document"]["embedding"]
+                    self._log(project_id, "embedding.started", "Started embedding generation", document_id=document_id, details={"provider": embedding_settings["plugin"], "model": embedding_settings["model"], "vector_store": self.settings_for(project_id)["document"]["vector_store"]["plugin"], "passages": len(passages)})
+                    vectors = embeddings.embed([item["text"] for item in passages])
                     self._vectors_for(project_id).upsert([item["id"] for item in passages],
                                         [item["text"] for item in passages], vectors,
                                         str(project_id), str(document_id))
-                    self._log(project_id, "embedding.persisted", "Stored embeddings in Chroma", document_id=document_id, details={"vector_store": "Chroma", "passages": len(passages)}, duration_ms=round((perf_counter() - embedding_started) * 1000))
+                    self._log(project_id, "embedding.persisted", "Stored embeddings", document_id=document_id, details={"vector_store": self.settings_for(project_id)["document"]["vector_store"]["plugin"], "passages": len(passages)}, duration_ms=round((perf_counter() - embedding_started) * 1000))
                 self.repository.replace(str(project_id), str(document_id), passages,
                                         version, document.content_hash)
-                self._log(project_id, "index.completed", "Saved passages and keyword index in SQLite", document_id=document_id, details={"database": "SQLite FTS5", "passages": len(passages), "index_version": self.version}, duration_ms=round((perf_counter() - started) * 1000))
+                self._log(project_id, "index.completed", "Saved passages and keyword index in SQLite", document_id=document_id, details={"database": "SQLite FTS5", "passages": len(passages), "index_version": version}, duration_ms=round((perf_counter() - started) * 1000))
             except DocumentError as error:
                 if error.code in ("DOCUMENT_NOT_FOUND", "PROJECT_NOT_FOUND"):
                     return
@@ -289,11 +328,10 @@ class SearchService:
 
     def remove_document(self, project_id: UUID, document_id: UUID) -> None:
         self.repository.delete(str(project_id), str(document_id))
-        if self.embeddings.ready:
-            try:
-                self._vectors_for(project_id).delete(str(project_id), str(document_id))
-            except Exception:
-                logger.exception("Vector cleanup failed; SQL validity checks prevent stale results")
+        try:
+            self._vectors_for(project_id).delete(str(project_id), str(document_id))
+        except Exception:
+            logger.exception("Vector cleanup failed; SQL validity checks prevent stale results")
 
     def statuses(self, project_id: UUID) -> list[dict]:
         self.documents.require_project(project_id)
@@ -303,9 +341,10 @@ class SearchService:
                limit: int = DEFAULTS["search"]["result_limit"]) -> list[dict]:
         self.documents.require_project(project_id)
         options = self.settings_for(project_id)["search"]
+        embeddings = self._embeddings_for(project_id)
         limit = limit if limit != DEFAULTS["search"]["result_limit"] else options["result_limit"]
         started = perf_counter()
-        self._log(project_id, "search.started", "Started project-scoped hybrid retrieval", details={"keyword_index": "SQLite FTS5", "semantic_enabled": self.embeddings.ready, "vector_store": "Chroma"})
+        self._log(project_id, "search.started", "Started project-scoped hybrid retrieval", details={"keyword_index": "SQLite FTS5", "semantic_enabled": embeddings.ready, "vector_store": self.settings_for(project_id)["document"]["vector_store"]["plugin"]})
         if not query.strip():
             return []
         try:
@@ -318,15 +357,16 @@ class SearchService:
         if not use_keyword:
             keyword = []
         semantic: list[str] = []
-        if use_semantic and self.embeddings.ready:
+        if use_semantic and embeddings.ready:
             try:
-                semantic = self._vectors_for(project_id).search(str(project_id), self.embeddings.embed([query])[0], options["semantic_candidates"])
+                semantic = self._vectors_for(project_id).search(str(project_id), embeddings.embed([query])[0], options["semantic_candidates"])
             except Exception:
                 logger.exception("Semantic search failed; keyword results remain available")
-                self.setup_state["embeddings"] = "failed"
-                self.setup_error["embeddings"] = "Semantic search is unavailable. Rebuild the index or retry model setup."
+                if embeddings is self.embeddings:
+                    self.setup_state["embeddings"] = "failed"
+                    self.setup_error["embeddings"] = "Semantic search is unavailable. Rebuild the index or retry model setup."
         elif use_semantic and not use_keyword:
-            raise DocumentError("MODEL_NOT_READY", "Set up the local embedding model for semantic search.", 409)
+            raise DocumentError("MODEL_NOT_READY", "The selected embedding model is not ready.", 409)
         ranks: dict[str, float] = {}
         matches: dict[str, set[str]] = {}
         for source, ids in (("keyword", keyword), ("semantic", semantic)):

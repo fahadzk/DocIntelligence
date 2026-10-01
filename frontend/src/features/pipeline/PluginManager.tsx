@@ -61,13 +61,13 @@ export function PluginManager() {
     finally { setBusy(false); }
   }
 
-  return <div className="lab-section plugin-manager"><h3>Plugins</h3><p>Add reusable connections for Pipeline Lab. Configurations are stored locally and loaded when the backend starts.</p>
+  return <div className="lab-section plugin-manager"><h3>Plugins</h3><p>Add reusable LLM, embedding model, and vector-store connections. Configurations are stored locally and loaded when the backend starts.</p>
     {message && <div className="lab-notice">{message}</div>}{error && <div className="error-state">{error}</div>}
-    <div className="plugin-list">{plugins.map((item) => <article className="plugin-card" key={item.id}><div><strong>{item.name}</strong><span>{item.category === "llm_providers" ? "LLM" : "Vector Store"} · {item.driver} · {item.location}</span><small>{item.active ? "Active" : "Restart required"}{item.enabled ? "" : " · Disabled"}</small></div><div><Button variant="quiet" onClick={() => { setEditing(item.id); setDraft(item); setMessage(undefined); }}>Edit</Button><Button variant="quiet" onClick={() => void remove(item.id)} disabled={busy}>Delete</Button></div></article>)}</div>
+    <div className="plugin-list">{plugins.map((item) => <article className="plugin-card" key={item.id}><div><strong>{item.name}</strong><span>{item.category === "llm_providers" ? "LLM" : item.category === "embeddings" ? "EM" : "Vector Store"} · {item.driver} · {item.location}</span><small>{item.active ? "Active" : "Restart required"}{item.enabled ? "" : " · Disabled"}</small></div><div><Button variant="quiet" onClick={() => { setEditing(item.id); setDraft(item); setMessage(undefined); }}>Edit</Button><Button variant="quiet" onClick={() => void remove(item.id)} disabled={busy}>Delete</Button></div></article>)}</div>
     <div className="plugin-editor"><h4>{editing ? "Edit plugin" : "Add plugin"}</h4><div className="lab-control-grid"><div>
       <label>Plugin type<select className="input" value={draft.category} onChange={(event) => selectCategory(event.target.value)} disabled={Boolean(editing)}>{categories.map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select></label>
       <label>Provider / driver<select className="input" value={draft.driver} onChange={(event) => selectDriver(event.target.value)} disabled={Boolean(editing)}>{matching.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-      <label>Name<input className="input" value={draft.name} onChange={(event) => setName(event.target.value)} placeholder="Office Ollama" /></label>
+      <label>Name<input className="input" value={draft.name} onChange={(event) => setName(event.target.value)} placeholder={draft.category === "embeddings" ? "Research embeddings" : "Office Ollama"} /></label>
       <label>Plugin ID<input className="input" value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} disabled={Boolean(editing)} /></label>
     </div><div>
       {selected && <><p className="field-help">{selected.description}</p><label>Location<select className="input" value={draft.location} onChange={(event) => setDraft({ ...draft, location: event.target.value })}>{selected.locations.map((item) => <option key={item} value={item}>{item[0].toUpperCase() + item.slice(1)}</option>)}</select></label>

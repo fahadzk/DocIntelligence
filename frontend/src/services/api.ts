@@ -54,7 +54,7 @@ export const searchApi = {
   rebuild: (projectId: string) => request<{ status: string }>(`/api/projects/${projectId}/index/rebuild`, { method: "POST" }),
   search: (projectId: string, query: string) => request<{ results: Passage[] }>(`/api/projects/${projectId}/search`, { method: "POST", body: JSON.stringify({ query }) }),
   ask: (projectId: string, question: string) => request<Answer>(`/api/projects/${projectId}/ask`, { method: "POST", body: JSON.stringify({ question }) }),
-  models: () => request<Models>("/api/models"),
+  models: (projectId?: string) => request<Models>(`/api/models${projectId ? `?project_id=${projectId}` : ""}`),
   setup: (kind: "embeddings" | "answers") => request<ModelState>(`/api/models/${kind}/setup`, { method: "POST" }),
   evidence: (projectId: string, id: string) => request<Passage>(`/api/projects/${projectId}/evidence/${id}`)
 };
@@ -78,5 +78,6 @@ export const pipelineApi = {
   saveCredential: (id: string, key: string) => request<{ configured: boolean }>(`/api/providers/${id}/credential`, { method: "PUT", body: JSON.stringify({ key }) }),
   removeCredential: (id: string) => request<{ configured: boolean }>(`/api/providers/${id}/credential`, { method: "DELETE" }),
   testProvider: (id: string) => request<{ connected: boolean; model_count: number }>(`/api/providers/${id}/test`, { method: "POST" }),
-  models: (id: string) => request<{ models: { id: string; name: string }[] }>(`/api/providers/${id}/models`)
+  models: (id: string) => request<{ models: { id: string; name: string }[] }>(`/api/providers/${id}/models`),
+  embeddingModels: (id: string) => request<{ models: { id: string; name: string }[] }>(`/api/embedding-providers/${id}/models`)
 };

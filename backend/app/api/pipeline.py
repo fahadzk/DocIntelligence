@@ -202,3 +202,23 @@ def test_provider(provider_id: str, registry: PluginRegistry = Depends(get_plugi
 def provider_models(provider_id: str, registry: PluginRegistry = Depends(get_plugin_registry)):
     implementation = registry.get("llm_providers", provider_id).implementation()
     return {"models": implementation.models()}
+
+
+@router.get("/api/embedding-providers/{provider_id}/models")
+def embedding_provider_models(provider_id: str,
+                              registry: PluginRegistry = Depends(get_plugin_registry)):
+    try:
+        plugin = registry.get("embeddings", provider_id)
+        settings = get_settings()
+        if plugin.capabilities.get("managed"):
+            from app.infrastructure.local_models import LocalEmbeddings
+            implementation = LocalEmbeddings((settings.model_dir or settings.data_dir / "models") / "embeddings")
+        else:
+            implementation = plugin.implementation(settings.data_dir, model="")
+        models = implementation.models()
+        default_model = plugin.capabilities.get("default_model")
+        if default_model and not any(item["id"] == default_model for item in models):
+            models.insert(0, {"id": default_model, "name": default_model})
+        return {"models": models}
+    except ValueError as error:
+        raise DocumentError("INVALID_EMBEDDING_PROVIDER", str(error), 422) from error

@@ -26,12 +26,17 @@ PLUGINS = [
         field("max_chunk_size", "Maximum characters", "number", min=100, max=4000),
         field("preserve_headings", "Preserve headings", "boolean")),
         {"source_locations": True}, strategies.llm),
-    Plugin("fastembed_bge_small", "BGE Small / FastEmbed", "Local ONNX English embeddings, 384 dimensions.", "embeddings", (
-        field("model", "Model", "select", options=["BAAI/bge-small-en-v1.5"]),),
-        {"local": True, "dimensions": 384}, LocalEmbeddings),
+    Plugin("fastembed_bge_small", "BGE Small / FastEmbed", "App-managed local ONNX embeddings.", "embeddings", (
+        field("model", "Model", "model_select"),),
+        {"local": True, "location": "local", "driver": "fastembed", "dimensions": 384,
+         "model_discovery": True, "managed": True, "default_model": "BAAI/bge-small-en-v1.5"},
+        lambda directory, model="BAAI/bge-small-en-v1.5": LocalEmbeddings(
+            directory / "models" / "embeddings", model)),
     Plugin("chroma", "Chroma", "Persistent local vector collection.", "vector_stores", (
         field("distance", "Distance", "select", options=["l2"]),),
-        {"local": True, "location": "local", "driver": "chroma"}, ChromaVectorStore),
+        {"local": True, "location": "local", "driver": "chroma"},
+        lambda directory, profile="standard": ChromaVectorStore(
+            directory / "vectors", f"bge_small_en_v15_chunk_v1_{profile}")),
     Plugin("keyword", "Keyword", "SQLite FTS5 and BM25 ordering.", "retrieval", (
         field("keyword_candidates", "Candidates", "number", min=1, max=100),
         field("result_limit", "Results", "number", min=1, max=50)),

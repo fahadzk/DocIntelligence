@@ -24,8 +24,9 @@ class LabSearchService(SearchService):
         self.vector_profile = "pipeline_lab"
 
     def version_for(self, project_id: UUID) -> str:
+        embeddings = self._embeddings_for(project_id)
         return document_version(self.config_service.effective(project_id)) + (
-            "+bge-small-en-v1.5" if self.embeddings.ready else "+keyword")
+            "+embeddings" if embeddings.ready else "+keyword")
 
     def schedule_project(self, project_id: UUID) -> None:
         threading.Thread(target=self.ensure_project, args=(project_id,), daemon=True,
@@ -69,13 +70,14 @@ class LabSearchService(SearchService):
                 self.repository.mark(str(project_id), str(document_id), "indexing", "splitting", version, document.content_hash)
                 segments = self.documents.content(project_id, document_id)["segments"]
                 settings = config["document"]["chunking"]
+                embeddings = self._embeddings_for(project_id)
                 chunker = self.registry.get("chunking", settings["plugin"]).implementation
                 passages = chunker(str(project_id), str(document_id), document.content_hash,
-                                   segments, version, settings, embeddings=self.embeddings,
+                                   segments, version, settings, embeddings=embeddings,
                                    llm=self._chunk_llm(settings))
-                if self.embeddings.ready and passages:
+                if embeddings.ready and passages:
                     self.repository.mark(str(project_id), str(document_id), "indexing", "embedding", version, document.content_hash)
-                    vectors = self.embeddings.embed([row["text"] for row in passages])
+                    vectors = embeddings.embed([row["text"] for row in passages])
                     self._vectors_for(project_id).upsert([row["id"] for row in passages], [row["text"] for row in passages],
                                         vectors, str(project_id), str(document_id))
                 else:
@@ -97,10 +99,11 @@ class LabSearchService(SearchService):
             raise DocumentError("DOCUMENT_NOT_READY", "Only readable documents can be previewed.", 409)
         config = self.config_service.effective(project_id)
         settings = config["document"]["chunking"]
+        embeddings = self._embeddings_for(project_id)
         chunker = self.registry.get("chunking", settings["plugin"]).implementation
         passages = chunker(str(project_id), str(document_id), document.content_hash,
                            self.documents.content(project_id, document_id)["segments"],
-                           self.version_for(project_id), settings, embeddings=self.embeddings,
+                           self.version_for(project_id), settings, embeddings=embeddings,
                            llm=self._chunk_llm(settings))
         return {"count": len(passages),
                 "average_characters": round(sum(len(row["text"]) for row in passages) / len(passages)) if passages else 0,
@@ -133,16 +136,17 @@ class LabSearchService(SearchService):
             raise DocumentError("INVALID_RETRIEVAL_PLUGIN", "The selected retrieval plugin returned invalid sources.", 500)
         use_keyword = "keyword" in sources
         use_semantic = "semantic" in sources
+        embeddings = self._embeddings_for(project_id)
         keyword = self._keyword(project_id, query, config["keyword_candidates"]) if use_keyword else []
         semantic = []
-        if use_semantic and self.embeddings.ready:
-            vector = self.embeddings.embed([query])[0]
+        if use_semantic and embeddings.ready:
+            vector = embeddings.embed([query])[0]
             semantic = self._vectors_for(project_id).search_with_distances(str(project_id), vector, config["semantic_candidates"])
             threshold = config["similarity_threshold"]
             if threshold is not None:
                 semantic = [(pid, distance) for pid, distance in semantic if distance <= threshold]
         elif use_semantic and not use_keyword:
-            raise DocumentError("MODEL_NOT_READY", "Set up the local embedding model for semantic search.", 409)
+            raise DocumentError("MODEL_NOT_READY", "The selected embedding model is not ready.", 409)
         records = {}
         for source, candidates in (("keyword", keyword), ("semantic", semantic)):
             for rank, (pid, score) in enumerate(candidates):

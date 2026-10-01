@@ -41,6 +41,7 @@ Document Intelligence should remain a local-first, evidence-first desktop worksp
 | F-010 | Interoperability with other RAG tools | P2 | Proposed | 10 |
 | F-011 | Research intelligence and knowledge extraction | P2 | Proposed | 11 |
 | F-012 | Safe extension and plugin packaging | P2 | Proposed | 12 |
+| F-013 | Context-aware rolling-window LLM chunking | P1 | Proposed | 13 |
 
 ---
 
@@ -269,6 +270,31 @@ Evolve the current built-in plugin registry toward installable, versioned extens
 
 Portable projects should identify required extensions by stable ID and compatible version range, but should never embed executable plugin code.
 
+---
+
+## F-013 — Context-aware rolling-window LLM chunking
+
+**Priority:** P1
+**Status:** Proposed
+
+Replace the fixed 12-paragraph, 220-character-preview batching used by LLM chunking with token-aware rolling windows. Large documents must remain incremental; the application must never send an entire document to a model in one request.
+
+The strategy should:
+
+- discover the selected model's context window where the provider exposes it, with a conservative configurable fallback;
+- reserve explicit budgets for system instructions, structured output, and a safety margin;
+- fill each request with complete paragraphs up to the remaining input-token budget;
+- carry a configurable number of paragraphs into the next request and reconcile boundary decisions in the overlap;
+- split an oversized paragraph into sentence-aware subwindows instead of bypassing semantic boundary analysis;
+- keep `max_chunk_size` as an independent hard limit on stored chunk size rather than treating it as the model-input limit;
+- preserve page and paragraph citation metadata while processing pages and segments incrementally;
+- expose progress, cancellation, retry, and resumable checkpoints for long documents;
+- respect provider concurrency and rate limits, and avoid repeating successful model calls after a recoverable failure.
+
+Initial configuration should include an automatic context-budget mode, an optional context-window override, reserved output tokens, input safety margin, and batch-overlap paragraphs. The first implementation should default to a 4,096-token context window when model metadata is unavailable and use a two-paragraph overlap.
+
+Acceptance criteria should cover small-context local models, larger hosted models, very long paragraphs, hundreds-page PDFs, provider interruption and resume, deterministic boundary reconciliation, and enforcement of the final chunk-size limit.
+
 ## Explicitly out of scope for this backlog
 
 - Exporting API keys, credential-vault data, authentication tokens, or other secrets.
@@ -289,4 +315,5 @@ Portable projects should identify required extensions by stable ID and compatibl
 
 ## Change log
 
+- 2026-10-01: Added F-013 for token-aware rolling-window LLM chunking with overlap, provider context metadata, and resumable large-document processing.
 - 2026-09-30: Created the future feature scope. Defined portable project export/import as the first implementation candidate and added related roadmap features.

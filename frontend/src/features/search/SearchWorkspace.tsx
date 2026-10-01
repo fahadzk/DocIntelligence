@@ -23,7 +23,7 @@ export function SearchWorkspace({ project, mode, active = true }: { project: Pro
 
   useEffect(() => {
     let mounted = true;
-    void Promise.all([searchApi.models(), searchApi.status(project.id)])
+    void Promise.all([searchApi.models(project.id), searchApi.status(project.id)])
       .then(([nextModels, nextIndexes]) => { if (mounted) { setModels(nextModels); setIndexes(nextIndexes); } })
       .catch((cause) => { if (mounted) setError(cause instanceof Error ? cause.message : "Unable to load search status."); });
     return () => { mounted = false; };
@@ -33,7 +33,7 @@ export function SearchWorkspace({ project, mode, active = true }: { project: Pro
     if (!active || loading) return;
     let mounted = true;
     const timer = window.setInterval(() => {
-      void Promise.all([searchApi.models(), searchApi.status(project.id)])
+      void Promise.all([searchApi.models(project.id), searchApi.status(project.id)])
         .then(([nextModels, nextIndexes]) => { if (mounted) { setModels(nextModels); setIndexes(nextIndexes); } })
         .catch(() => undefined);
     }, fastRefresh ? 2500 : 15000);
@@ -52,7 +52,7 @@ export function SearchWorkspace({ project, mode, active = true }: { project: Pro
   }
   async function setup(kind: "embeddings" | "answers") {
     setError(undefined);
-    try { await searchApi.setup(kind); setModels(await searchApi.models()); }
+    try { await searchApi.setup(kind); setModels(await searchApi.models(project.id)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Model setup could not start."); }
   }
   async function rebuild() {
@@ -65,7 +65,7 @@ export function SearchWorkspace({ project, mode, active = true }: { project: Pro
   const model = mode === "ask" ? models?.answers : models?.embeddings;
   return <section className="search-workspace">
     <div className="documents-heading section-heading"><div><p className="eyebrow">Workspace</p><h2>{mode === "ask" ? "Ask" : "Search"}</h2><p>{mode === "ask" ? "Answers grounded in this project's documents." : "Find source passages by exact terms or related meaning."}</p></div>{mode === "search" && <Button variant="secondary" icon="refresh" onClick={() => void rebuild()}>Rebuild index</Button>}</div>
-    {model && model.status !== "ready" && <div className="model-setup">
+    {model && model.status !== "ready" && (mode === "ask" || model.managed !== false) && <div className="model-setup">
       <Icon name="model" size={20} /><div><strong>{mode === "ask" ? "Local answer model" : "Semantic search model"}</strong><p>{mode === "ask" ? "Qwen2.5 1.5B, Apache 2.0. About 1.1 GB download; allow roughly 3 GB RAM. Search works without it." : "BGE-small English, MIT. About 70 MB download and disk space. Exact-term search works without it."}</p><small>Source: <a href={model.source} target="_blank" rel="noreferrer">{model.name}</a>. Download once; runs offline afterward.</small>{model.error && <p role="alert">{model.error}</p>}</div>
       <Button onClick={() => void setup(mode === "ask" ? "answers" : "embeddings")} disabled={model.status === "downloading"}>{model.status === "downloading" ? "Downloading…" : model.status === "failed" ? "Retry setup" : "Set up locally"}</Button>
     </div>}
