@@ -16,7 +16,7 @@ npm run dev
 
 Run checks with `npm test`, `npm run build`, and from `backend`, `..\.venv\Scripts\python.exe -m pytest`.
 
-See [Development](DEVELOPMENT.md), [Architecture](ARCHITECTURE.md), and the [work plan](docs/WORKPLAN.md).
+See [Development](DEVELOPMENT.md), [Architecture](ARCHITECTURE.md), the [work plan](docs/WORKPLAN.md), and the [future feature scope](docs/FEATURE_SCOPE.md).
 
 Open a project and choose **Add documents**. Processing status and failures appear in the document list. Select a ready document to read its extracted text and source references. **Open original** opens the retained copy in the operating system's default application.
 

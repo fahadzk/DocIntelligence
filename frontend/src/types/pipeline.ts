@@ -4,7 +4,7 @@ export type PipelineTab = "document" | "search" | "ask" | "plugins";
 export interface PluginField {
   key: string;
   label: string;
-  type: "slider" | "number" | "boolean" | "select" | "text" | "model_select";
+  type: "slider" | "number" | "boolean" | "select" | "text" | "password" | "model_select";
   options?: string[];
   min?: number;
   max?: number;
