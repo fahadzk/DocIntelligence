@@ -192,6 +192,42 @@ class SearchService:
         self.documents.get(project_id, document_id)
         return self.repository.passages_for_document(str(project_id), str(document_id))
 
+    def paged_chunks(self, project_id: UUID, document_id: UUID, *, page_number: int | None = None,
+               start_page: int | None = None, end_page: int | None = None,
+               offset: int = 0, limit: int = 50) -> dict:
+        document = self.documents.get(project_id, document_id)
+        if page_number is not None and (start_page is not None or end_page is not None):
+            raise DocumentError('INVALID_PAGE_RANGE', 'Choose either a specific page or a page range, not both.', 422)
+        if document.file_type != 'pdf' and any(value is not None for value in (page_number, start_page, end_page)):
+            raise DocumentError('INVALID_PAGE_RANGE', 'Page filters are only available for PDF documents.', 422)
+
+        selected_start = selected_end = None
+        if document.file_type == 'pdf':
+            page_count = document.page_count or 0
+            selected_start = page_number if page_number is not None else (start_page or 1)
+            selected_end = page_number if page_number is not None else (end_page or min(selected_start + 9, page_count))
+            if selected_start > selected_end:
+                raise DocumentError('INVALID_PAGE_RANGE', 'The start page must not be after the end page.', 422)
+            if selected_end - selected_start + 1 > 10:
+                raise DocumentError('INVALID_PAGE_RANGE', 'A page range can contain at most 10 pages.', 422)
+            if selected_start > page_count or selected_end > page_count:
+                raise DocumentError('INVALID_PAGE_RANGE', f'Choose a page between 1 and {page_count}.', 422)
+
+        items, total = self.repository.paged_passages_for_document(
+            str(project_id), str(document_id), start_page=selected_start, end_page=selected_end,
+            offset=offset, limit=limit,
+        )
+        return {
+            'items': items,
+            'total': total,
+            'offset': offset,
+            'limit': limit,
+            'has_more': offset + len(items) < total,
+            'start_page': selected_start,
+            'end_page': selected_end,
+            'page_count': document.page_count,
+        }
+
     def index_document(self, project_id: UUID, document_id: UUID, force: bool = False) -> None:
         started = perf_counter()
         version = self.version_for(project_id)

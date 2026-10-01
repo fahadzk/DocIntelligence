@@ -2,7 +2,7 @@
 import threading
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
@@ -84,8 +84,16 @@ def get_content(project_id: UUID, document_id: UUID, documents: DocumentService 
 
 
 @router.get("/{document_id}/chunks")
-def chunks(project_id: UUID, document_id: UUID):
-    return get_search_service().chunks(project_id, document_id)
+def chunks(project_id: UUID, document_id: UUID,
+           page_number: int | None = Query(default=None, ge=1),
+           start_page: int | None = Query(default=None, ge=1),
+           end_page: int | None = Query(default=None, ge=1),
+           offset: int = Query(default=0, ge=0),
+           limit: int = Query(default=50, ge=1, le=100)):
+    return get_search_service().paged_chunks(
+        project_id, document_id, page_number=page_number, start_page=start_page,
+        end_page=end_page, offset=offset, limit=limit,
+    )
 
 @router.post("/{document_id}/reindex")
 def reindex(project_id: UUID, document_id: UUID):

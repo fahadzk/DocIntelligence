@@ -28,6 +28,33 @@ class SearchRepository:
             """, (project_id,)).fetchall()
         return [dict(row) for row in rows]
 
+    def paged_passages_for_document(self, project_id: str, document_id: str, *,
+                                    start_page: int | None = None,
+                                    end_page: int | None = None,
+                                    offset: int = 0, limit: int = 50) -> tuple[list[dict], int]:
+        # Count and retrieve only the requested slice so large documents stay bounded.
+        page_filter = ''
+        parameters: list[str | int] = [project_id, document_id, 'ready', 'ready']
+        if start_page is not None and end_page is not None:
+            page_filter = ' AND p.page_number BETWEEN ? AND ?'
+            parameters.extend((start_page, end_page))
+        live_passages = (
+            'FROM passages p '
+            'JOIN documents d ON d.id=p.document_id AND d.project_id=p.project_id '
+            'JOIN document_indexes i ON i.document_id=d.id '
+            'WHERE p.project_id=? AND p.document_id=? AND d.status=? '
+            'AND i.status=? AND i.index_version=p.index_version AND i.content_hash=d.content_hash '
+            + page_filter
+        )
+        with self.connect() as connection:
+            total = connection.execute(f'SELECT COUNT(*) {live_passages}', parameters).fetchone()[0]
+            rows = connection.execute(
+                f'SELECT p.*, d.display_name, d.file_type {live_passages} '
+                'ORDER BY p.segment_index, p.chunk_index LIMIT ? OFFSET ?',
+                [*parameters, limit, offset],
+            ).fetchall()
+        return [dict(row) for row in rows], total
+
     def rebuild_fts(self) -> None:
         """FTS is derived entirely from passages and can be recreated safely."""
         with self.connect() as connection:

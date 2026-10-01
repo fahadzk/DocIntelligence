@@ -24,6 +24,33 @@ export interface Segment {
   text: string;
 }
 
+export interface Chunk extends Segment {
+  id: string;
+  chunk_index: number;
+  start_offset: number;
+  end_offset: number;
+  index_version: string;
+}
+
+export interface ChunkPage {
+  items: Chunk[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  start_page: number | null;
+  end_page: number | null;
+  page_count: number | null;
+}
+
+export interface ChunkQuery {
+  pageNumber?: number;
+  startPage?: number;
+  endPage?: number;
+  offset?: number;
+  limit?: number;
+}
+
 export interface ImportOutcome {
   filename: string;
   document: DocumentItem | null;

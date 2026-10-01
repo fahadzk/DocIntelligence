@@ -82,7 +82,7 @@ test("imports and reads a document in the project workspace", async () => {
     if (url.endsWith("/documents") && options?.method === "POST") { documents = [document]; return reply([{ filename: "notes.txt", document, error_code: null, error_message: null }]); }
     if (url.endsWith("/documents")) return reply(documents);
     if (url.endsWith(document.id)) return reply(document);
-    if (url.endsWith("/content")) return reply({ segments: [{ index: 0, kind: "paragraph", label: "Paragraph 1", page_number: null, paragraph_number: 1, text: "Readable notes" }] });
+    if (url.includes("/chunks")) return reply({ items: [{ id: "chunk-1", index: 0, chunk_index: 0, kind: "paragraph", label: "Paragraph 1", page_number: null, paragraph_number: 1, start_offset: 0, end_offset: 14, index_version: "v1", text: "Readable notes" }], total: 1, offset: 0, limit: 50, has_more: false, start_page: null, end_page: null, page_count: null });
     throw new Error(`Unexpected request: ${url}`);
   }));
   render(<App />);

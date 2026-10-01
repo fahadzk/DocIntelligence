@@ -1,5 +1,5 @@
 ﻿import type { Project } from "../types/projects";
-import type { DocumentItem, ImportOutcome, Segment } from "../types/documents";
+import type { ChunkPage, ChunkQuery, DocumentItem, ImportOutcome, Segment } from "../types/documents";
 import type { Answer, IndexState, ModelState, Models, Passage } from "../types/search";
 import type { Plugin, PluginDriver, PluginInstance, PipelineState, PipelineSettings, LabPassage, ChunkPreview, LabIndexState } from "../types/pipeline";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
@@ -17,10 +17,19 @@ export const projectsApi = {
 };
 
 export const documentsApi = {
+  chunkPage: (projectId: string, id: string, query: ChunkQuery = {}) => {
+    const parameters = new URLSearchParams();
+    if (query.pageNumber !== undefined) parameters.set('page_number', String(query.pageNumber));
+    if (query.startPage !== undefined) parameters.set('start_page', String(query.startPage));
+    if (query.endPage !== undefined) parameters.set('end_page', String(query.endPage));
+    if (query.offset !== undefined) parameters.set('offset', String(query.offset));
+    if (query.limit !== undefined) parameters.set('limit', String(query.limit));
+    const suffix = parameters.size ? `?${parameters}` : '';
+    return request<ChunkPage>(`/api/projects/${projectId}/documents/${id}/chunks${suffix}`);
+  },
   list: (projectId: string) => request<DocumentItem[]>(`/api/projects/${projectId}/documents`),
   get: (projectId: string, id: string) => request<DocumentItem>(`/api/projects/${projectId}/documents/${id}`),
   content: (projectId: string, id: string) => request<{ segments: Segment[] }>(`/api/projects/${projectId}/documents/${id}/content`),
-  chunks: (projectId: string, id: string) => request<(Segment & { id: string; chunk_index: number; start_offset: number; end_offset: number; index_version: string })[]>(`/api/projects/${projectId}/documents/${id}/chunks`),
   reindex: (projectId: string, id: string) => request<{ status: string }>(`/api/projects/${projectId}/documents/${id}/reindex`, { method: "POST" }),
   reembed: (projectId: string, id: string) => request<{ status: string }>(`/api/projects/${projectId}/documents/${id}/embeddings`, { method: "POST" }),
   retry: (projectId: string, id: string) => request<DocumentItem>(`/api/projects/${projectId}/documents/${id}/retry`, { method: "POST" }),

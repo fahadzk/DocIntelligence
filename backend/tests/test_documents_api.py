@@ -164,6 +164,47 @@ def test_project_deletion_removes_only_its_document_files(client):
     assert client.get(f"/api/projects/{second}/documents/{kept['id']}/content").status_code == 200
 
 
+def test_chunks_are_filtered_by_page_range_and_paginated(client):
+    project_id = project(client)
+    document = upload(
+        client,
+        project_id,
+        'long.pdf',
+        pdf_bytes([f'Content for page {page}' for page in range(1, 13)]),
+    )['document']
+    document_id = document['id']
+    from app.main import get_search_service
+    get_search_service().index_document(UUID(project_id), UUID(document_id), force=True)
+    url = f'/api/projects/{project_id}/documents/{document_id}/chunks'
+
+    first_window = client.get(url).json()
+    assert first_window['start_page'] == 1
+    assert first_window['end_page'] == 10
+    assert first_window['page_count'] == 12
+    assert {item['page_number'] for item in first_window['items']} == set(range(1, 11))
+
+    exact_page = client.get(url, params={'page_number': 12}).json()
+    assert exact_page['start_page'] == exact_page['end_page'] == 12
+    assert {item['page_number'] for item in exact_page['items']} == {12}
+
+    paged = client.get(url, params={'start_page': 1, 'end_page': 10, 'limit': 3}).json()
+    assert len(paged['items']) == 3
+    assert paged['total'] == 10
+    assert paged['has_more'] is True
+    following = client.get(url, params={'start_page': 1, 'end_page': 10, 'limit': 3, 'offset': 3}).json()
+    assert following['items'][0]['page_number'] == 4
+
+
+def test_chunk_page_filter_validation(client):
+    project_id = project(client)
+    document = upload(client, project_id, 'pages.pdf', pdf_bytes(['text'] * 12))['document']
+    document_id = document['id']
+    url = f'/api/projects/{project_id}/documents/{document_id}/chunks'
+    assert client.get(url, params={'page_number': 2, 'start_page': 1}).status_code == 422
+    assert client.get(url, params={'start_page': 1, 'end_page': 11}).status_code == 422
+    assert client.get(url, params={'page_number': 13}).status_code == 422
+
+
 def test_retained_original_survives_source_move(client, tmp_path: Path):
     project_id = project(client)
     source = tmp_path / "source.txt"
