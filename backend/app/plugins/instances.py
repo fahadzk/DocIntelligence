@@ -59,6 +59,24 @@ DRIVERS = (
           "placeholder": "Optional for local Qdrant"},
          {"key": "timeout_seconds", "label": "Timeout (seconds)", "type": "number",
           "min": 5, "max": 300, "default": 30}]},
+    {"id": "neo4j", "name": "Neo4j", "category": "vector_stores", "category_name": "Vector Store",
+     "locations": ["network", "cloud"],
+     "description": "Store project-isolated vectors in a Neo4j server or Aura database over Bolt.",
+     "schema": [
+         {"key": "uri", "label": "Connection URI", "type": "text", "required": True,
+          "placeholder": "neo4j+s://example.databases.neo4j.io"},
+         {"key": "database", "label": "Database", "type": "text", "required": True,
+          "default": "neo4j", "placeholder": "neo4j"},
+         {"key": "username", "label": "Username", "type": "text", "required": True,
+          "default": "neo4j", "placeholder": "neo4j"},
+         {"key": "password", "label": "Password", "type": "password", "secret": True,
+          "placeholder": "Stored in the operating system credential vault"},
+         {"key": "index_name", "label": "Vector index prefix", "type": "text", "required": True,
+          "default": "document_vectors", "placeholder": "document_vectors"},
+         {"key": "dimensions", "label": "Embedding dimensions", "type": "number",
+          "min": 1, "max": 4096, "default": 384},
+         {"key": "timeout_seconds", "label": "Timeout (seconds)", "type": "number",
+          "min": 5, "max": 300, "default": 30}]},
 )
 
 _ID = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
@@ -159,12 +177,21 @@ def validate_instance(value: dict) -> dict:
         if parsed.query or parsed.fragment:
             raise ValueError("Server URL cannot contain a query or fragment")
         normalized[url_key] = normalized[url_key].rstrip("/")
-    if driver_id in ("chroma", "qdrant"):
-        names = [normalized["collection_name"]]
+    if driver_id == "neo4j":
+        parsed = urlparse(normalized["uri"])
+        if (parsed.scheme not in ("neo4j", "neo4j+s", "neo4j+ssc", "bolt", "bolt+s", "bolt+ssc")
+                or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ("", "/")
+                or parsed.query or parsed.fragment):
+            raise ValueError("Neo4j URI must be a Bolt/Neo4j address without embedded credentials or a path")
+        normalized["uri"] = normalized["uri"].rstrip("/")
+        if not _STORAGE.fullmatch(normalized["database"]):
+            raise ValueError("Neo4j database name is invalid")
+    if driver_id in ("chroma", "qdrant", "neo4j"):
+        names = [normalized["index_name"]] if driver_id == "neo4j" else [normalized["collection_name"]]
         if driver_id == "chroma":
             names.append(normalized["storage_name"])
         if any(not _STORAGE.fullmatch(name) for name in names):
-            raise ValueError("Storage and collection names may use letters, numbers, underscores, and hyphens")
+            raise ValueError("Storage, collection, and index names may use letters, numbers, underscores, and hyphens")
     return {"id": plugin_id, "name": name.strip(), "category": category, "driver": driver_id,
             "location": location, "enabled": enabled, "settings": normalized}
 
@@ -230,6 +257,7 @@ class PluginInstanceStore:
 
 def configured_plugin(record: dict, data_dir: Path):
     from app.infrastructure.local_models import ChromaVectorStore, LocalEmbeddings
+    from app.infrastructure.neo4j_vector_store import Neo4jVectorStore
     from app.infrastructure.qdrant_vector_store import QdrantVectorStore
     from app.plugins.ollama_provider import OllamaProvider
     from app.plugins.embedding_providers import OllamaEmbeddings, OpenAICompatibleEmbeddings
@@ -276,6 +304,14 @@ def configured_plugin(record: dict, data_dir: Path):
             lambda _directory=None, profile="standard", values=settings, plugin_id=item["id"]: QdrantVectorStore(
                 values["url"], f"{values['collection_name']}_{profile}", _secret(plugin_id, "api_key"),
                 values["timeout_seconds"]))
+    if item["driver"] == "neo4j":
+        return Plugin(item["id"], item["name"], f"{item['location'].title()} Neo4j vector database.",
+            "vector_stores", ({"key": "distance", "label": "Distance", "type": "select", "options": ["l2"]},),
+            {"local": False, "location": item["location"], "driver": "neo4j", "configured": True},
+            lambda _directory=None, profile="standard", values=settings, plugin_id=item["id"]: Neo4jVectorStore(
+                values["uri"], values["database"], values["username"],
+                values.get("password") or _secret(plugin_id, "password"),
+                f"{values['index_name']}_{profile}", values["timeout_seconds"], values["dimensions"]))
     if item["driver"] != "chroma":
         raise ValueError(f"Unsupported configured plugin driver: {item['driver']}")
     return Plugin(item["id"], item["name"], "Configured local Chroma vector store.", "vector_stores", (
@@ -307,6 +343,11 @@ def test_instance(record: dict, data_dir: Path) -> dict:
         result = store.health_check()
         return {"connected": True, "message": "Qdrant connection is available",
                 "resource_count": result["collections"], "resources": []}
+    if item["driver"] == "neo4j":
+        store = plugin.implementation(profile="connection_test")
+        result = store.health_check()
+        return {"connected": True, "message": "Neo4j connection is available",
+                "resource_count": result["indexes"], "resources": []}
     store = plugin.implementation(profile="connection_test")
     store.collection()
     return {"connected": True, "message": "Chroma storage is available", "resource_count": 1,

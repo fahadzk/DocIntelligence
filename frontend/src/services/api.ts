@@ -60,6 +60,7 @@ export const searchApi = {
 };
 
 let pluginRegistryRequest: Promise<{ plugins: Plugin[] }> | undefined;
+type DeepPartial<T> = { [Key in keyof T]?: T[Key] extends object ? DeepPartial<T[Key]> : T[Key] };
 export const pipelineApi = {
   registry: () => pluginRegistryRequest ??= request<{ plugins: Plugin[] }>("/api/plugins"),
   pluginDrivers: () => request<{ drivers: PluginDriver[] }>("/api/plugin-drivers"),
@@ -69,7 +70,7 @@ export const pipelineApi = {
   deletePlugin: (id: string) => request<void>(`/api/plugin-instances/${id}`, { method: "DELETE" }),
   testPlugin: (plugin: PluginInstance) => request<{ connected: boolean; message: string; resource_count: number }>("/api/plugin-instances/test", { method: "POST", body: JSON.stringify(plugin) }),
   state: (projectId: string) => request<PipelineState>(`/api/projects/${projectId}/pipeline`),
-  save: (projectId: string, overrides: Partial<PipelineSettings>, keepalive = false) => request<PipelineState>(`/api/projects/${projectId}/pipeline`, { method: "PUT", body: JSON.stringify({ overrides }), keepalive }),
+  save: (projectId: string, overrides: DeepPartial<PipelineSettings>, keepalive = false) => request<PipelineState>(`/api/projects/${projectId}/pipeline`, { method: "PUT", body: JSON.stringify({ overrides }), keepalive }),
   ensureIndex: (projectId: string) => request<{ status: string }>(`/api/projects/${projectId}/pipeline/index/ensure`, { method: "POST" }),
   indexStatus: (projectId: string) => request<LabIndexState[]>(`/api/projects/${projectId}/pipeline/index/status`),
   preview: (projectId: string, documentId: string) => request<ChunkPreview>(`/api/projects/${projectId}/pipeline/preview`, { method: "POST", body: JSON.stringify({ document_id: documentId }) }),

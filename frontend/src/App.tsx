@@ -116,7 +116,7 @@ function ProjectWorkspace({ project, view, onNavigate, onEdit, registry, registr
   return <section className="project-workspace">
     <header className="project-context"><div><p className="eyebrow">Current project</p><h1>{project.name}</h1></div><IconButton aria-label="Edit project" title="Edit project" onClick={onEdit}><Icon name="edit" /></IconButton></header>
     <div hidden={view !== "overview"}><ProjectOverview project={project} onNavigate={onNavigate} /></div>
-    <div hidden={view !== "documents"}><DocumentsWorkspace project={project} /></div>
+    <div hidden={view !== "documents"}><DocumentsWorkspace project={project} registry={registry} /></div>
     <div hidden={view !== "search"}><SearchWorkspace project={project} mode="search" active={view === "search"} /></div>
     <div hidden={view !== "ask"}><SearchWorkspace project={project} mode="ask" active={view === "ask"} /></div>
     <div hidden={view !== "lab"}>{labVisited && <PipelineLab project={project} registry={registry} registryError={registryError} active={view === "lab"} />}</div>
