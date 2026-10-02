@@ -75,7 +75,7 @@ class SearchRepository:
                   error, datetime.now(timezone.utc).isoformat()))
 
     def replace(self, project_id: str, document_id: str, passages: list[dict],
-                version: str, content_hash: str) -> None:
+                version: str, content_hash: str, stage: str = "complete") -> None:
         with self.connect() as connection:
             ids = [row[0] for row in connection.execute(
                 "SELECT id FROM passages WHERE project_id=? AND document_id=?",
@@ -91,12 +91,21 @@ class SearchRepository:
                 "INSERT INTO passages_fts (id, project_id, text) VALUES (?, ?, ?)",
                 [(item["id"], project_id, item["text"]) for item in passages])
             connection.execute("""
-                INSERT INTO document_indexes VALUES (?, ?, 'ready', 'complete', ?, ?, NULL, ?)
-                ON CONFLICT(document_id) DO UPDATE SET status='ready', stage='complete',
+                INSERT INTO document_indexes VALUES (?, ?, 'ready', ?, ?, ?, NULL, ?)
+                ON CONFLICT(document_id) DO UPDATE SET status='ready', stage=excluded.stage,
                     index_version=excluded.index_version, content_hash=excluded.content_hash,
                     error_message=NULL, updated_at=excluded.updated_at
-            """, (document_id, project_id, version, content_hash,
+            """, (document_id, project_id, stage, version, content_hash,
                   datetime.now(timezone.utc).isoformat()))
+
+    def operation_state(self, project_id: str, document_id: str, stage: str,
+                        error: str | None = None) -> None:
+        """Record a vector operation without making valid chunks unavailable."""
+        with self.connect() as connection:
+            connection.execute("""
+                UPDATE document_indexes SET status='ready', stage=?, error_message=?, updated_at=?
+                WHERE project_id=? AND document_id=?
+            """, (stage, error, datetime.now(timezone.utc).isoformat(), project_id, document_id))
 
     def delete(self, project_id: str, document_id: str) -> None:
         with self.connect() as connection:

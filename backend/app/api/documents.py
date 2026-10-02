@@ -98,14 +98,16 @@ def chunks(project_id: UUID, document_id: UUID,
 @router.post("/{document_id}/reindex")
 def reindex(project_id: UUID, document_id: UUID):
     search = get_search_service()
-    search.documents.get(project_id, document_id)
-    threading.Thread(target=search.index_document, args=(project_id, document_id, True), daemon=True, name=f"reindex-{document_id}").start()
-    return {"status": "indexing"}
+    document = search.documents.get(project_id, document_id)
+    search.repository.operation_state(str(project_id), str(document_id), "splitting")
+    threading.Thread(target=search.rechunk_document, args=(project_id, document_id), daemon=True, name=f"rechunk-{document_id}").start()
+    return {"status": "chunking"}
 
 @router.post("/{document_id}/embeddings")
 def reembed(project_id: UUID, document_id: UUID):
     search = get_search_service()
     search.documents.get(project_id, document_id)
+    search.repository.operation_state(str(project_id), str(document_id), "embedding")
     threading.Thread(target=search.reembed_document, args=(project_id, document_id), daemon=True, name=f"reembed-{document_id}").start()
     return {"status": "embedding"}
 

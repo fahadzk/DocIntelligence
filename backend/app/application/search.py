@@ -189,9 +189,11 @@ class SearchService:
             """).fetchall()
         for row in rows:
             project_id = UUID(row["project_id"])
-            # Recover missing/interrupted indexes and changed source content. A saved
-            # document-pipeline configuration is applied only by an explicit reindex.
-            if row["status"] != "ready" or row["indexed_hash"] != row["content_hash"]:
+            # Recover only missing/interrupted work or changed source content. A
+            # failed index requires an explicit user retry; silently retrying it here
+            # can launch a full chunk+embedding pipeline beside a manual Re-chunk.
+            if (row["status"] is None or row["status"] == "indexing"
+                    or row["indexed_hash"] != row["content_hash"]):
                 self.index_document(project_id, UUID(row["id"]))
 
     def rebuild_all(self) -> None:
@@ -208,20 +210,67 @@ class SearchService:
 
     def reembed_document(self, project_id: UUID, document_id: UUID) -> None:
         """Regenerate vectors while retaining the current chunks and keyword index."""
-        embeddings = self._embeddings_for(project_id)
-        if not embeddings.ready:
-            raise DocumentError("MODEL_NOT_READY", "The selected embedding model is not ready.", 409)
-        document = self.documents.get(project_id, document_id)
-        if document.status != "ready":
-            raise DocumentError("DOCUMENT_NOT_READY", "Only readable documents can be embedded.", 409)
-        passages = self.repository.passages_for_document(str(project_id), str(document_id))
-        if not passages:
-            self.index_document(project_id, document_id, force=True)
-            return
-        vectors = embeddings.embed([item["text"] for item in passages])
-        store = self._vectors_for(project_id)
-        store.delete(str(project_id), str(document_id))
-        store.upsert([item["id"] for item in passages], [item["text"] for item in passages], vectors, str(project_id), str(document_id))
+        with self._lock:
+            try:
+                embeddings = self._embeddings_for(project_id)
+                if not embeddings.ready:
+                    raise DocumentError("MODEL_NOT_READY", "The selected embedding model is not ready.", 409)
+                document = self.documents.get(project_id, document_id)
+                if document.status != "ready":
+                    raise DocumentError("DOCUMENT_NOT_READY", "Only readable documents can be embedded.", 409)
+                passages = self.repository.passages_for_document(str(project_id), str(document_id))
+                if not passages:
+                    raise DocumentError("CHUNKS_NOT_READY", "No current chunks are available. Run Re-chunk first.", 409)
+                self.repository.operation_state(str(project_id), str(document_id), "embedding")
+                vectors = embeddings.embed([item["text"] for item in passages])
+                store = self._vectors_for(project_id)
+                store.delete(str(project_id), str(document_id))
+                store.upsert([item["id"] for item in passages], [item["text"] for item in passages], vectors, str(project_id), str(document_id))
+                self.repository.operation_state(str(project_id), str(document_id), "complete")
+            except DocumentError as error:
+                logger.exception("Re-embedding failed for document %s", document_id)
+                self._mark_operation_failure(project_id, document_id, "Re-embedding", error.message)
+            except Exception:
+                logger.exception("Re-embedding failed for document %s", document_id)
+                self._mark_operation_failure(project_id, document_id, "Re-embedding")
+
+    def rechunk_document(self, project_id: UUID, document_id: UUID) -> None:
+        """Regenerate chunks and the keyword index without generating search vectors."""
+        started = perf_counter()
+        version = self.version_for(project_id)
+        with self._lock:
+            try:
+                document = self.documents.get(project_id, document_id)
+                if document.status != "ready":
+                    raise DocumentError("DOCUMENT_NOT_READY", "Only readable documents can be re-chunked.", 409)
+                self.repository.operation_state(str(project_id), str(document_id), "splitting")
+                segments = self.documents.content(project_id, document_id)["segments"]
+                settings = self.settings_for(project_id)["document"]["chunking"]
+                embeddings = self._embeddings_for(project_id)
+                if self.registry:
+                    chunker = self.registry.get("chunking", settings["plugin"]).implementation
+                    passages = chunker(str(project_id), str(document_id), document.content_hash, segments,
+                                       version, settings, embeddings=embeddings, llm=self._chunk_llm(settings))
+                else:
+                    passages = split_segments(str(project_id), str(document_id), document.content_hash, segments, version)
+                self.repository.replace(str(project_id), str(document_id), passages,
+                                        version, document.content_hash, stage="chunked")
+                try:
+                    self._vectors_for(project_id).delete(str(project_id), str(document_id))
+                except Exception:
+                    logger.exception("Stale vector cleanup failed after re-chunking document %s", document_id)
+                self._log(project_id, "chunking.completed", "Re-chunked document without generating embeddings",
+                          document_id=document_id, details={"strategy": settings["plugin"], "segments": len(segments),
+                                                           "passages": len(passages)},
+                          duration_ms=round((perf_counter() - started) * 1000))
+            except DocumentError as error:
+                if error.code in ("DOCUMENT_NOT_FOUND", "PROJECT_NOT_FOUND"):
+                    return
+                logger.exception("Re-chunking failed for document %s", document_id)
+                self._mark_operation_failure(project_id, document_id, "Re-chunking", error.message)
+            except Exception:
+                logger.exception("Re-chunking failed for document %s", document_id)
+                self._mark_operation_failure(project_id, document_id, "Re-chunking")
 
     def chunks(self, project_id: UUID, document_id: UUID) -> list[dict]:
         self.documents.get(project_id, document_id)
@@ -325,6 +374,23 @@ class SearchService:
                                  self.version_for(project_id), content_hash, "Indexing failed. Rebuild this document's index.")
         except sqlite3.IntegrityError:
             logger.info("Index result discarded for removed document %s", document_id)
+
+    def _mark_operation_failure(self, project_id: UUID, document_id: UUID, operation: str,
+                                reason: str | None = None, failed_index: bool = False) -> None:
+        message = f"{operation} failed"
+        if reason:
+            message += f" due to: {reason.rstrip().rstrip('.')}"
+        message += ". Check the server log for details."
+        try:
+            if failed_index:
+                document = self.documents.get(project_id, document_id)
+                self.repository.mark(str(project_id), str(document_id), "failed", operation.lower(),
+                                     self.version_for(project_id), document.content_hash, message)
+            else:
+                self.repository.operation_state(str(project_id), str(document_id),
+                                                f"{operation.lower()}_failed", message)
+        except (DocumentError, sqlite3.IntegrityError):
+            logger.info("Operation result discarded for removed document %s", document_id)
 
     def remove_document(self, project_id: UUID, document_id: UUID) -> None:
         self.repository.delete(str(project_id), str(document_id))

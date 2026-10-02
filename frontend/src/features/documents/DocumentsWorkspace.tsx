@@ -4,7 +4,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { ErrorState } from "../../components/ErrorState";
 import { LoadingState } from "../../components/LoadingState";
 import { Icon } from "../../components/Icon";
-import { documentsApi, pipelineApi } from "../../services/api";
+import { documentsApi, pipelineApi, searchApi } from "../../services/api";
 import type {
   ChunkPage,
   ChunkQuery,
@@ -12,10 +12,17 @@ import type {
 } from "../../types/documents";
 import type { Project } from "../../types/projects";
 import type { PipelineState, Plugin } from "../../types/pipeline";
+import type { IndexState } from "../../types/search";
 
 const CHUNK_LIMIT = 50;
 
-export function DocumentsWorkspace({ project, registry }: { project: Project; registry: Plugin[] }) {
+export function DocumentsWorkspace({
+  project,
+  registry,
+}: {
+  project: Project;
+  registry: Plugin[];
+}) {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [selected, setSelected] = useState<DocumentItem>();
   const [chunkPage, setChunkPage] = useState<ChunkPage>();
@@ -32,6 +39,10 @@ export function DocumentsWorkspace({ project, registry }: { project: Project; re
   const [pipeline, setPipeline] = useState<PipelineState>();
   const [vectorStore, setVectorStore] = useState("");
   const [savingVectorStore, setSavingVectorStore] = useState(false);
+  const [documentOperation, setDocumentOperation] = useState<
+    "rechunk" | "reembed"
+  >();
+  const [operationState, setOperationState] = useState<IndexState>();
   const picker = useRef<HTMLInputElement>(null);
   const selectedId = selected?.id;
   const selectedStatus = selected?.status;
@@ -61,15 +72,80 @@ export function DocumentsWorkspace({ project, registry }: { project: Project; re
   useEffect(() => {
     if (!registry.some((item) => item.category === "vector_stores")) return;
     let active = true;
-    void pipelineApi.state(project.id).then((value) => {
-      if (!active) return;
-      setPipeline(value);
-      setVectorStore(value.effective.document.vector_store.plugin);
-    }).catch((cause) => {
-      if (active) setError(cause instanceof Error ? cause.message : "Unable to load vector storage settings.");
-    });
-    return () => { active = false; };
+    void pipelineApi
+      .state(project.id)
+      .then((value) => {
+        if (!active) return;
+        setPipeline(value);
+        setVectorStore(value.effective.document.vector_store.plugin);
+      })
+      .catch((cause) => {
+        if (active)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "Unable to load vector storage settings.",
+          );
+      });
+    return () => {
+      active = false;
+    };
   }, [project.id, registry]);
+
+  useEffect(() => {
+    if (!documentOperation || !selectedId) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const states = await searchApi.status(project.id);
+        if (!active) return;
+        const current = states.find((item) => item.document_id === selectedId);
+        setOperationState(current);
+        const failed =
+          current?.status === "failed" || current?.stage?.endsWith("_failed");
+        const complete =
+          documentOperation === "rechunk"
+            ? current?.stage === "chunked"
+            : current?.stage === "complete";
+        if (failed) {
+          setError(
+            current?.error_message ??
+              `${documentOperation === "rechunk" ? "Re-chunking" : "Re-embedding"} failed. Check the server log for details.`,
+          );
+          setDocumentOperation(undefined);
+        } else if (complete) {
+          if (documentOperation === "rechunk") {
+            setNotices([
+              "Re-chunking completed. Retrieval embeddings were not generated; run Re-embed when needed.",
+            ]);
+            void loadChunks(activeRange(0));
+          } else {
+            setNotices([
+              "Re-embedding completed. Existing chunks were retained.",
+            ]);
+          }
+          setDocumentOperation(undefined);
+        }
+      } catch (cause) {
+        if (active) {
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "Could not read operation status.",
+          );
+          setDocumentOperation(undefined);
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 750);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+    // The polling lifecycle is intentionally tied to the selected operation and document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentOperation, project.id, selectedId]);
 
   useEffect(() => {
     if (!documents.some((item) => item.status === "processing")) return;
@@ -234,10 +310,13 @@ export function DocumentsWorkspace({ project, registry }: { project: Project; re
 
   async function reindex() {
     if (!selected) return;
+    setError(undefined);
+    setOperationState(undefined);
     try {
       await documentsApi.reindex(project.id, selected.id);
+      setDocumentOperation("rechunk");
       setNotices([
-        `Re-chunking and re-indexing ${selected.display_name} using this project configuration.`,
+        `Re-chunking ${selected.display_name} and rebuilding its keyword index. Retrieval embeddings are not generated.`,
       ]);
     } catch (cause) {
       setError(
@@ -248,8 +327,11 @@ export function DocumentsWorkspace({ project, registry }: { project: Project; re
 
   async function reembed() {
     if (!selected) return;
+    setError(undefined);
+    setOperationState(undefined);
     try {
       await documentsApi.reembed(project.id, selected.id);
+      setDocumentOperation("reembed");
       setNotices([
         `Regenerating embeddings for ${selected.display_name}. Existing chunks are retained.`,
       ]);
@@ -267,19 +349,34 @@ export function DocumentsWorkspace({ project, registry }: { project: Project; re
     setSavingVectorStore(true);
     try {
       const overrides = pipeline.overrides as Record<string, unknown>;
-      const document = (overrides.document && typeof overrides.document === "object"
-        ? overrides.document : {}) as Record<string, unknown>;
-      const vector = (document.vector_store && typeof document.vector_store === "object"
-        ? document.vector_store : {}) as Record<string, unknown>;
+      const document = (
+        overrides.document && typeof overrides.document === "object"
+          ? overrides.document
+          : {}
+      ) as Record<string, unknown>;
+      const vector = (
+        document.vector_store && typeof document.vector_store === "object"
+          ? document.vector_store
+          : {}
+      ) as Record<string, unknown>;
       const saved = await pipelineApi.save(project.id, {
         ...overrides,
-        document: { ...document, vector_store: { ...vector, plugin: vectorStore, distance: "l2" } },
+        document: {
+          ...document,
+          vector_store: { ...vector, plugin: vectorStore, distance: "l2" },
+        },
       });
       setPipeline(saved);
-      setNotices(["Vector storage saved. Re-chunk and re-index each affected document to write vectors to the selected store."]);
+      setNotices([
+        "Vector storage saved. Re-chunk and re-index each affected document to write vectors to the selected store.",
+      ]);
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save vector storage.");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not save vector storage.",
+      );
     } finally {
       setSavingVectorStore(false);
     }
@@ -358,13 +455,48 @@ export function DocumentsWorkspace({ project, registry }: { project: Project; re
         aria-label="Choose documents"
         onChange={(event) => void importFiles(event.target.files)}
       />
-      {pipeline && <div className="document-vector-setting">
-        <div><Icon name="database" size={18} /><span><strong>Vector storage</strong><small>Choose where semantic vectors are searched. Local SQLite remains the authoritative source for chunks and citations.</small></span></div>
-        <label><span className="visually-hidden">Vector storage</span><select className="input" value={vectorStore} onChange={(event) => setVectorStore(event.target.value)}>
-          {registry.filter((item) => item.category === "vector_stores").map((item) => <option key={item.id} value={item.id}>{item.name} · {String(item.capabilities.location ?? "local")}</option>)}
-        </select></label>
-        <Button variant="secondary" icon="check" disabled={savingVectorStore || vectorStore === pipeline.effective.document.vector_store.plugin} onClick={() => void saveVectorStore()}>{savingVectorStore ? "Saving…" : "Save"}</Button>
-      </div>}
+      {pipeline && (
+        <div className="document-vector-setting">
+          <div>
+            <Icon name="database" size={18} />
+            <span>
+              <strong>Vector storage</strong>
+              <small>
+                Choose where semantic vectors are searched. Local SQLite remains
+                the authoritative source for chunks and citations.
+              </small>
+            </span>
+          </div>
+          <label>
+            <span className="visually-hidden">Vector storage</span>
+            <select
+              className="input"
+              value={vectorStore}
+              onChange={(event) => setVectorStore(event.target.value)}
+            >
+              {registry
+                .filter((item) => item.category === "vector_stores")
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} ·{" "}
+                    {String(item.capabilities.location ?? "local")}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <Button
+            variant="secondary"
+            icon="check"
+            disabled={
+              savingVectorStore ||
+              vectorStore === pipeline.effective.document.vector_store.plugin
+            }
+            onClick={() => void saveVectorStore()}
+          >
+            {savingVectorStore ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      )}
       {notices.length > 0 && (
         <div className="import-notices" role="status">
           {notices.map((notice) => (
@@ -480,20 +612,35 @@ export function DocumentsWorkspace({ project, registry }: { project: Project; re
                     <Button
                       icon="chunk"
                       onClick={() => void reindex()}
-                      title="Re-chunk and re-index this document"
+                      title="Regenerate chunks and the keyword index without generating retrieval embeddings"
+                      disabled={documentOperation !== undefined}
                     >
-                      Re-chunk
+                      {documentOperation === "rechunk"
+                        ? "Re-chunking…"
+                        : "Re-chunk"}
                     </Button>
                     <Button
                       variant="secondary"
                       icon="embedding"
                       onClick={() => void reembed()}
-                      title="Regenerate embeddings for this document"
+                      title="Regenerate retrieval embeddings while retaining the current chunks"
+                      disabled={documentOperation !== undefined}
                     >
-                      Re-embed
+                      {documentOperation === "reembed"
+                        ? "Re-embedding…"
+                        : "Re-embed"}
                     </Button>
                   </div>
                 </div>
+                {documentOperation && (
+                  <p className="lab-notice" role="status">
+                    {documentOperation === "rechunk"
+                      ? "Re-chunking"
+                      : "Re-embedding"}{" "}
+                    in progress
+                    {operationState?.stage ? ` · ${operationState.stage}` : ""}…
+                  </p>
+                )}
                 {selected.status === "processing" ? (
                   <LoadingState label="Extracting readable text…" />
                 ) : selected.status === "failed" ? (
